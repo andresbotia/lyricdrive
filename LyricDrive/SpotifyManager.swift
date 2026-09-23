@@ -24,6 +24,17 @@ final class SpotifyManager: NSObject, ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var albumArtwork: UIImage?
 
+    /// `true` when App Remote couldn't connect specifically because Spotify's local transport
+    /// isn't listening yet (the app is installed/authorized but asleep) — as opposed to a real
+    /// authorization problem. The UI should offer a "Reconnect Spotify" action instead of "Connect".
+    @Published private(set) var requiresSpotifyWake = false
+
+    /// `true` for the whole span of an SDK-driven wake attempt: from the moment
+    /// `wakeSpotifyAndReconnect()` calls `initiateSession` through the redirect callback and the
+    /// subsequent App Remote connection attempt. The UI should show a "connecting" state rather
+    /// than the wake button while this is `true`.
+    @Published private(set) var isWakingSpotify = false
+
     /// The continuously-advancing, locally-interpolated playback position. This is what UI (and,
     /// later, lyric-line selection) should read. It is derived from the authoritative anchor below
     /// on every clock tick, never advanced by blindly adding a fixed step per timer fire.
@@ -67,11 +78,19 @@ final class SpotifyManager: NSObject, ObservableObject {
         return configuration
     }()
 
-    /// Drives authorization via the Spotify app (or web fallback), free of the deprecated
+    /// Drives authorization via the installed Spotify app only (`.clientOnly`, never a web/Safari
+    /// fallback — App Remote is useless without the Spotify app anyway), free of the deprecated
     /// `UIApplication.openURL(_:)` path that `SPTAppRemote.authorizeAndPlayURI` used internally.
     private lazy var sessionManager: SPTSessionManager = {
         SPTSessionManager(configuration: configuration, delegate: self)
     }()
+
+    /// Logs whether the SDK believes the Spotify app is installed. Purely diagnostic — we still
+    /// attempt `.clientOnly` authorization regardless, since forcing that option already
+    /// guarantees no web-auth fallback, so a false negative here can't cause one either.
+    private func logSpotifyInstallStatus() {
+        print("Spotify app installed: \(sessionManager.isSpotifyAppInstalled)")
+    }
 
     private lazy var appRemote: SPTAppRemote = {
         let appRemote = SPTAppRemote(configuration: configuration, logLevel: .debug)
@@ -119,7 +138,8 @@ final class SpotifyManager: NSObject, ObservableObject {
             sessionManager.renewSession()
         } else {
             print("SpotifyManager: Spotify authorization required")
-            sessionManager.initiateSession(with: [.appRemoteControl], options: .default)
+            logSpotifyInstallStatus()
+            sessionManager.initiateSession(with: [.appRemoteControl], options: .clientOnly)
         }
     }
 
@@ -141,7 +161,44 @@ final class SpotifyManager: NSObject, ObservableObject {
         isConnected = false
         isConnecting = false
         hasRetriedConnection = false
+        requiresSpotifyWake = false
+        isWakingSpotify = false
         errorMessage = nil
+    }
+
+    /// Bootstraps Spotify's local App Remote transport via an SDK-driven app switch —
+    /// `SPTSessionManager.initiateSession(with:options: .clientOnly)`. This exact call was
+    /// verified against a minimal, isolated diagnostic target (SpotifyDiagnostic) on the same
+    /// physical device: it performed a real app switch, obtained a fresh session, and shortly
+    /// after that App Remote's local transport came up. A second diagnostic path,
+    /// `appRemote.authorizeAndPlayURI("")`, was verified NOT to work on this iOS/SDK
+    /// combination — it hits the deprecated `UIApplication.openURL(_:)` path, iOS force-fails
+    /// it ("BUG IN CLIENT OF UIKIT"), and the call returns `false` without doing anything. Do
+    /// not reintroduce `authorizeAndPlayURI` here.
+    ///
+    /// This is NOT a re-authorization — for an already-approved app, Spotify redirects straight
+    /// back without prompting the user, and the existing Keychain session is left untouched
+    /// unless Spotify itself reports a genuine authorization failure. Only ever called from
+    /// explicit user action (the "Reconnect Spotify" button), never automatically, and guarded
+    /// against overlapping calls, so this can't turn into a loop of app switches.
+    func bootstrapSpotifyAppRemote() {
+        guard !isWakingSpotify else { return }
+
+        guard currentSession != nil else {
+            // No session to bootstrap with — shouldn't normally be reachable from the wake UI,
+            // but fall back to the standard authorization entry point if it somehow is.
+            connect()
+            return
+        }
+
+        print("SpotifyManager: Starting Spotify SDK wake app-switch")
+        requiresSpotifyWake = false
+        isWakingSpotify = true
+        errorMessage = nil
+        hasRetriedConnection = false
+
+        logSpotifyInstallStatus()
+        sessionManager.initiateSession(with: [.appRemoteControl], options: .clientOnly)
     }
 
     func disconnect() {
@@ -170,6 +227,7 @@ final class SpotifyManager: NSObject, ObservableObject {
             print("SpotifyManager: Spotify session renewal requested")
             sessionManager.renewSession()
         } else {
+            print("SpotifyManager: Returning active; reconnecting App Remote")
             connectAppRemote()
         }
     }
@@ -287,20 +345,32 @@ final class SpotifyManager: NSObject, ObservableObject {
         return parts.joined(separator: " | ")
     }
 
-    /// `true` if the failure looks like Spotify's local App Remote transport simply wasn't up
-    /// yet right after the app switch (the "Connection refused" on ::1:9095 case), as opposed to
-    /// a real authorization/connection error worth surfacing without a retry.
+    /// `true` if the failure looks like Spotify's local App Remote transport simply isn't
+    /// listening (the app is installed/authorized but its App Remote service is asleep) —
+    /// recognized by any of, at any depth in the `NSUnderlyingErrorKey` chain:
+    /// `SPTAppRemoteErrorDomain` code `connectionAttemptFailedError` (-1000), the
+    /// `com.spotify.app-remote.transport` stream error (-2000), or the innermost
+    /// `NSPOSIXErrorDomain` `ECONNREFUSED` (61) on ::1:9095. This is never treated as an
+    /// authorization problem — the saved session and access token are left untouched.
     private func isLocalTransportNotReadyError(_ error: NSError) -> Bool {
         if error.domain == SPTAppRemoteErrorDomain,
            error.code == SPTAppRemoteErrorCode.connectionAttemptFailedError.rawValue {
             return true
         }
-        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError,
-           underlying.domain == NSPOSIXErrorDomain,
-           underlying.code == Int(ECONNREFUSED) {
+        return errorChainContainsTransportFailure(error, depth: 0)
+    }
+
+    private func errorChainContainsTransportFailure(_ error: NSError, depth: Int) -> Bool {
+        if error.domain == "com.spotify.app-remote.transport" {
             return true
         }
-        return false
+        if error.domain == NSPOSIXErrorDomain, error.code == Int(ECONNREFUSED) {
+            return true
+        }
+        guard depth < 5, let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError else {
+            return false
+        }
+        return errorChainContainsTransportFailure(underlying, depth: depth + 1)
     }
 }
 
@@ -309,10 +379,19 @@ final class SpotifyManager: NSObject, ObservableObject {
 extension SpotifyManager: SPTSessionManagerDelegate {
 
     func sessionManager(manager: SPTSessionManager, didInitiate session: SPTSession) {
+        let wasWaking = isWakingSpotify
+        if wasWaking {
+            print("SpotifyManager: Spotify SDK wake callback received")
+        }
+
         currentSession = session
         accessToken = session.accessToken
         sessionStore.save(session: session)
         appRemote.connectionParameters.accessToken = session.accessToken
+
+        if wasWaking {
+            print("SpotifyManager: Connecting App Remote after SDK wake")
+        }
         connectAppRemote()
     }
 
@@ -327,8 +406,15 @@ extension SpotifyManager: SPTSessionManagerDelegate {
 
     func sessionManager(manager: SPTSessionManager, didFailWith error: Error) {
         let description = fullDescription(of: error as NSError)
-        errorMessage = description
         print("SpotifyManager: Spotify session manager failed — \(description)")
+
+        if isWakingSpotify {
+            // The SDK wake attempt itself failed before ever reaching App Remote — return to the
+            // wake-requestable state rather than leaving the UI stuck on "connecting".
+            isWakingSpotify = false
+            requiresSpotifyWake = true
+        }
+        errorMessage = description
         // Deliberately not touching `currentSession`/the Keychain here: a temporarily
         // unreachable network or a transient renewal error must not throw away a previously
         // good authorization. Only an explicit disconnectAndForgetSpotify() call does that —
@@ -342,9 +428,12 @@ extension SpotifyManager: SPTSessionManagerDelegate {
 extension SpotifyManager: SPTAppRemoteDelegate {
 
     func appRemoteDidEstablishConnection(_ appRemote: SPTAppRemote) {
+        print("SpotifyManager: Spotify App Remote connected")
         isConnected = true
         isConnecting = false
         hasRetriedConnection = false
+        requiresSpotifyWake = false
+        isWakingSpotify = false
         errorMessage = nil
 
         appRemote.playerAPI?.delegate = self
@@ -368,15 +457,33 @@ extension SpotifyManager: SPTAppRemoteDelegate {
         guard let nsError = error as NSError? else { return }
 
         let description = fullDescription(of: nsError)
-        errorMessage = description
         print("SpotifyManager: App Remote connection attempt failed — \(description)")
 
-        if !hasRetriedConnection, isLocalTransportNotReadyError(nsError) {
+        guard isLocalTransportNotReadyError(nsError) else {
+            // A genuine connection error unrelated to the transport-asleep case — surface it
+            // as-is, and don't touch the wake-state UI.
+            errorMessage = description
+            return
+        }
+
+        print("SpotifyManager: Spotify App Remote transport unavailable")
+
+        if !hasRetriedConnection {
+            // Give it exactly one short chance to settle — this covers the common case where
+            // Spotify has *just* become active (e.g. right after the SDK wake redirect) and its
+            // local transport is still catching up.
             hasRetriedConnection = true
             print("SpotifyManager: retrying App Remote connection once after local transport was not ready")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
                 self?.connectAppRemote(isRetry: true)
             }
+        } else {
+            // The one retry also hit a sleeping transport — stop here rather than repeatedly
+            // invoking the SDK wake against a process that isn't listening, and let the user
+            // explicitly trigger it again.
+            isWakingSpotify = false
+            requiresSpotifyWake = true
+            errorMessage = "Spotify needs to reconnect. Tap Reconnect Spotify to continue."
         }
     }
 

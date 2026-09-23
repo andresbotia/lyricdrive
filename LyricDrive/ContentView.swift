@@ -17,6 +17,8 @@ struct ContentView: View {
 
             if spotifyManager.isConnected {
                 connectedView
+            } else if spotifyManager.requiresSpotifyWake {
+                wakeSpotifyView
             } else {
                 disconnectedView
             }
@@ -42,6 +44,40 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
 
             errorText
+        }
+        .padding()
+    }
+
+    /// Shown instead of the Connect button when Spotify is already authorized but its local App
+    /// Remote transport is asleep — this is an app-switch prompt, not a re-authorization prompt.
+    private var wakeSpotifyView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "music.note")
+                .imageScale(.large)
+                .foregroundStyle(.white)
+
+            Text("LyricDrive")
+                .font(.title)
+                .foregroundStyle(.white)
+
+            if spotifyManager.isWakingSpotify {
+                ProgressView()
+                    .tint(.white)
+                Text("Reconnecting to Spotify…")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.6))
+            } else {
+                Button("Reconnect Spotify") {
+                    spotifyManager.bootstrapSpotifyAppRemote()
+                }
+                .buttonStyle(.borderedProminent)
+
+                Text(spotifyManager.errorMessage ?? "Spotify needs to be reconnected. Tap above to continue.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
         }
         .padding()
     }

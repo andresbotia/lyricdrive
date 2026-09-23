@@ -7,14 +7,23 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		410D2D5C30637B41001222B3 /* SpotifyiOS in Frameworks */ = {isa = PBXBuildFile; productRef = 410D2D5B30637B41001222B3 /* SpotifyiOS */; };
 		4142E0F630635B6000712947 /* SpotifyiOS in Frameworks */ = {isa = PBXBuildFile; productRef = 4142E0F530635B6000712947 /* SpotifyiOS */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		410D2D4B30637000001222B3 /* SpotifyDiagnostic.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpotifyDiagnostic.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		41971BA530634FBA00275D8C /* LyricDrive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LyricDrive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		410D2D573063704A001222B3 /* Exceptions for "SpotifyDiagnostic" folder in "SpotifyDiagnostic" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 410D2D4A30637000001222B3 /* SpotifyDiagnostic */;
+		};
 		4142E0F830635BF600712947 /* Exceptions for "LyricDrive" folder in "LyricDrive" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -25,6 +34,14 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		410D2D4C30637000001222B3 /* SpotifyDiagnostic */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				410D2D573063704A001222B3 /* Exceptions for "SpotifyDiagnostic" folder in "SpotifyDiagnostic" target */,
+			);
+			path = SpotifyDiagnostic;
+			sourceTree = "<group>";
+		};
 		41971BA730634FBA00275D8C /* LyricDrive */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -36,6 +53,12 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		410D2D4830637000001222B3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				410D2D5C30637B41001222B3 /* SpotifyiOS in Frameworks */,
+			);
+		};
 		41971BA230634FBA00275D8C /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
@@ -45,10 +68,19 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		410D2D5A30637B41001222B3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		41971B9C30634FBA00275D8C = {
 			isa = PBXGroup;
 			children = (
 				41971BA730634FBA00275D8C /* LyricDrive */,
+				410D2D4C30637000001222B3 /* SpotifyDiagnostic */,
+				410D2D5A30637B41001222B3 /* Frameworks */,
 				41971BA630634FBA00275D8C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -57,6 +89,7 @@
 			isa = PBXGroup;
 			children = (
 				41971BA530634FBA00275D8C /* LyricDrive.app */,
+				410D2D4B30637000001222B3 /* SpotifyDiagnostic.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -64,6 +97,27 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		410D2D4A30637000001222B3 /* SpotifyDiagnostic */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 410D2D5530637001001222B3 /* Build configuration list for PBXNativeTarget "SpotifyDiagnostic" */;
+			buildPhases = (
+				410D2D4730637000001222B3 /* Sources */,
+				410D2D4830637000001222B3 /* Frameworks */,
+				410D2D4930637000001222B3 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				410D2D4C30637000001222B3 /* SpotifyDiagnostic */,
+			);
+			name = SpotifyDiagnostic;
+			packageProductDependencies = (
+				410D2D5B30637B41001222B3 /* SpotifyiOS */,
+			);
+			productName = SpotifyDiagnostic;
+			productReference = 410D2D4B30637000001222B3 /* SpotifyDiagnostic.app */;
+			productType = "com.apple.product-type.application";
+		};
 		41971BA430634FBA00275D8C /* LyricDrive */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 41971BB030634FBA00275D8C /* Build configuration list for PBXNativeTarget "LyricDrive" */;
@@ -95,6 +149,9 @@
 				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
+					410D2D4A30637000001222B3 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 					41971BA430634FBA00275D8C = {
 						CreatedOnToolsVersion = 27.0;
 					};
@@ -118,11 +175,17 @@
 			projectRoot = "";
 			targets = (
 				41971BA430634FBA00275D8C /* LyricDrive */,
+				410D2D4A30637000001222B3 /* SpotifyDiagnostic */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		410D2D4930637000001222B3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
 		41971BA330634FBA00275D8C /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
@@ -131,6 +194,11 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		410D2D4730637000001222B3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 		41971BA130634FBA00275D8C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
@@ -139,6 +207,75 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		410D2D5330637001001222B3 /* Debug configuration for PBXNativeTarget "SpotifyDiagnostic" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SpotifyDiagnostic/Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.andresbotia.SpotifyDiagnostic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		410D2D5430637001001222B3 /* Release configuration for PBXNativeTarget "SpotifyDiagnostic" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SpotifyDiagnostic/Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.andresbotia.SpotifyDiagnostic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		41971BAE30634FBA00275D8C /* Debug configuration for PBXProject "LyricDrive" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -351,6 +488,14 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		410D2D5530637001001222B3 /* Build configuration list for PBXNativeTarget "SpotifyDiagnostic" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				410D2D5330637001001222B3 /* Debug configuration for PBXNativeTarget "SpotifyDiagnostic" */,
+				410D2D5430637001001222B3 /* Release configuration for PBXNativeTarget "SpotifyDiagnostic" */,
+			);
+			defaultConfigurationName = Release;
+		};
 		41971BA030634FBA00275D8C /* Build configuration list for PBXProject "LyricDrive" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -381,6 +526,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		410D2D5B30637B41001222B3 /* SpotifyiOS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4142E0F430635B6000712947 /* XCRemoteSwiftPackageReference "ios-sdk" */;
+			productName = SpotifyiOS;
+		};
 		4142E0F530635B6000712947 /* SpotifyiOS */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4142E0F430635B6000712947 /* XCRemoteSwiftPackageReference "ios-sdk" */;
