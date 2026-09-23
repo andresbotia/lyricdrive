@@ -11,81 +11,301 @@ struct ContentView: View {
     @EnvironmentObject private var spotifyManager: SpotifyManager
     @EnvironmentObject private var lyricsManager: LyricsManager
 
+    @State private var isConfirmingDisconnect = false
+    @ScaledMetric(relativeTo: .footnote) private var stepBadgeSize: CGFloat = 26
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if spotifyManager.isConnected {
-                connectedView
-            } else if spotifyManager.requiresSpotifyWake {
-                wakeSpotifyView
+            if !spotifyManager.isConnected {
+                onboardingView
+            } else if spotifyManager.trackURI.isEmpty {
+                readyView
             } else {
-                disconnectedView
+                connectedView
             }
         }
         .preferredColorScheme(.dark)
-    }
-
-    // MARK: - Disconnected
-
-    private var disconnectedView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "music.note")
-                .imageScale(.large)
-                .foregroundStyle(.white)
-
-            Text("LyricDrive")
-                .font(.title)
-                .foregroundStyle(.white)
-
-            Button("Connect Spotify") {
-                spotifyManager.connect()
+        .confirmationDialog("Disconnect Spotify?", isPresented: $isConfirmingDisconnect, titleVisibility: .visible) {
+            Button("Disconnect", role: .destructive) {
+                spotifyManager.disconnectAndForgetSpotify()
             }
-            .buttonStyle(.borderedProminent)
-
-            errorText
+        } message: {
+            Text("You'll need to connect Spotify again to use LyricDrive.")
         }
-        .padding()
     }
 
-    /// Shown instead of the Connect button when Spotify is already authorized but its local App
-    /// Remote transport is asleep — this is an app-switch prompt, not a re-authorization prompt.
-    private var wakeSpotifyView: some View {
+    // MARK: - Onboarding / connection
+
+    /// Everything shown while App Remote isn't connected: first launch, connecting, reconnect,
+    /// and connection problems. Returning users (already authorized) skip "How it works".
+    private var onboardingView: some View {
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(spacing: 32) {
+                    brandHeader
+
+                    if !spotifyManager.hasAuthorizedSession {
+                        howItWorks
+                    }
+
+                    VStack(spacing: 14) {
+                        connectionButton
+                        connectionIssue
+                    }
+
+                    Text("Requires the Spotify app and a Spotify account.")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.45))
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 32)
+                .frame(maxWidth: 480)
+                .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    private var brandHeader: some View {
         VStack(spacing: 16) {
-            Image(systemName: "music.note")
-                .imageScale(.large)
-                .foregroundStyle(.white)
+            Image(.brandIcon)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 104, height: 104)
+                .accessibilityHidden(true)
 
             Text("LyricDrive")
-                .font(.title)
+                .font(.largeTitle.weight(.bold))
                 .foregroundStyle(.white)
+                .accessibilityAddTraits(.isHeader)
 
-            if spotifyManager.isWakingSpotify {
-                ProgressView()
-                    .tint(.white)
-                Text("Reconnecting to Spotify…")
-                    .font(.caption)
+            VStack(spacing: 8) {
+                Text("Synchronized lyrics for the music you're already playing on Spotify.")
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                Text("Connect Spotify, start a song, and LyricDrive follows along on your iPhone and CarPlay.")
+                    .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.6))
-            } else {
-                Button("Reconnect Spotify") {
-                    spotifyManager.bootstrapSpotifyAppRemote()
-                }
-                .buttonStyle(.borderedProminent)
+            }
+            .multilineTextAlignment(.center)
+        }
+    }
 
-                Text(spotifyManager.errorMessage ?? "Spotify needs to be reconnected. Tap above to continue.")
+    private static let howItWorksSteps = [
+        "Connect Spotify",
+        "Start playing a song in Spotify",
+        "LyricDrive follows the track with synchronized lyrics",
+        "Connect to CarPlay for the in-car experience",
+    ]
+
+    private var howItWorks: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("How it works")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.6))
+                .accessibilityAddTraits(.isHeader)
+
+            ForEach(Array(Self.howItWorksSteps.enumerated()), id: \.offset) { index, step in
+                HStack(alignment: .center, spacing: 12) {
+                    Text("\(index + 1)")
+                        .font(.footnote.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.black)
+                        .frame(width: stepBadgeSize, height: stepBadgeSize)
+                        .background(Circle().fill(Color.brandCyan))
+                        .accessibilityHidden(true)
+                    Text(step)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Step \(index + 1): \(step)")
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 18).fill(.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.08)))
+    }
+
+    /// The single primary action, derived purely from existing `SpotifyManager` state.
+    private enum ConnectionAction {
+        case connect, reconnect, wake, inProgress
+
+        var title: String {
+            switch self {
+            case .connect: "Connect Spotify"
+            case .reconnect, .wake: "Reconnect Spotify"
+            case .inProgress: "Connecting…"
+            }
+        }
+    }
+
+    private var connectionAction: ConnectionAction {
+        if spotifyManager.isWakingSpotify || spotifyManager.isConnecting { return .inProgress }
+        if spotifyManager.requiresSpotifyWake { return .wake }
+        if spotifyManager.hasAuthorizedSession { return .reconnect }
+        return .connect
+    }
+
+    private var connectionButton: some View {
+        let action = connectionAction
+        return Button {
+            switch action {
+            case .connect, .reconnect: spotifyManager.connect()
+            case .wake: spotifyManager.bootstrapSpotifyAppRemote()
+            case .inProgress: break
+            }
+        } label: {
+            HStack(spacing: 10) {
+                if action == .inProgress {
+                    ProgressView()
+                        .tint(.white)
+                } else {
+                    Image(systemName: action == .connect ? "music.note" : "arrow.clockwise")
+                        .accessibilityHidden(true)
+                }
+                Text(action.title)
+            }
+            .font(.headline)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, minHeight: 54)
+            .background(
+                Capsule().fill(
+                    LinearGradient(colors: [.brandCyan, .brandBlue], startPoint: .leading, endPoint: .trailing)
+                )
+            )
+            .opacity(action == .inProgress ? 0.6 : 1)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(action == .inProgress)
+        .accessibilityLabel(action.title)
+        .accessibilityHint(action == .inProgress ? "" : "Opens Spotify to connect it to LyricDrive.")
+    }
+
+    /// Friendly summary of a connection problem. In Debug builds only, the raw SDK diagnostics are
+    /// also available, collapsed, under "Connection Details"; Release builds never show them.
+    @ViewBuilder
+    private var connectionIssue: some View {
+        if connectionAction != .inProgress, let message = connectionIssueMessage {
+            VStack(spacing: 10) {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                #if DEBUG
+                if let details = spotifyManager.errorMessage {
+                    DisclosureGroup("Connection Details") {
+                        Text(details)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.white.opacity(0.5))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 6)
+                    }
                     .font(.caption)
+                    .tint(.white.opacity(0.45))
+                }
+                #endif
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.05)))
+        }
+    }
+
+    private var connectionIssueMessage: String? {
+        if spotifyManager.requiresSpotifyWake {
+            return "Spotify needs to be reopened to reconnect. Tap Reconnect Spotify to continue."
+        }
+        if spotifyManager.errorMessage != nil {
+            return "Couldn't connect to Spotify. Make sure Spotify is installed and you're signed in, then try again."
+        }
+        return nil
+    }
+
+    // MARK: - Connected status
+
+    /// Subtle connected indicator plus the only (secondary) route to disconnecting Spotify.
+    private var connectedStatusBar: some View {
+        HStack {
+            Label("Spotify Connected", systemImage: "checkmark.circle.fill")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.white.opacity(0.7))
+                .labelStyle(StatusLabelStyle())
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(.white.opacity(0.08)))
+
+            Spacer()
+
+            Menu {
+                Button(role: .destructive) {
+                    isConfirmingDisconnect = true
+                } label: {
+                    Label("Disconnect Spotify", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("More options")
+        }
+    }
+
+    // MARK: - Connected, nothing playing
+
+    private var readyView: some View {
+        VStack(spacing: 0) {
+            connectedStatusBar
+
+            Spacer()
+
+            VStack(spacing: 16) {
+                Image(systemName: "music.note")
+                    .font(.system(size: 40, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 96, height: 96)
+                    .background(
+                        Circle().fill(
+                            LinearGradient(colors: [.brandCyan.opacity(0.35), .brandBlue.opacity(0.25)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
+                    )
+                    .shadow(color: .brandCyan.opacity(0.3), radius: 20)
+                    .accessibilityHidden(true)
+
+                Text("Ready for Spotify")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .accessibilityAddTraits(.isHeader)
+
+                Text("Start playing a song in Spotify and LyricDrive will follow automatically.")
+                    .font(.body)
                     .foregroundStyle(.white.opacity(0.6))
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                    .frame(maxWidth: 360)
             }
+            .padding(.horizontal, 24)
+
+            Spacer()
         }
         .padding()
     }
 
-    // MARK: - Connected
+    // MARK: - Connected, playing
 
     private var connectedView: some View {
         VStack(spacing: 24) {
+            connectedStatusBar
+
             artworkView
 
             VStack(spacing: 4) {
@@ -101,13 +321,9 @@ struct ContentView: View {
 
             lyricsView
 
-            // Tenths of a second are shown temporarily to verify the local playback clock;
-            // drop this precision once lyric sync is finalized.
             Text(playbackPositionText)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.white.opacity(0.6))
-
-            errorText
         }
         .padding()
     }
@@ -174,35 +390,33 @@ struct ContentView: View {
         .frame(height: 150)
     }
 
-    @ViewBuilder
-    private var errorText: some View {
-        if let errorMessage = spotifyManager.errorMessage {
-            Text(errorMessage)
-                .font(.caption2)
-                .foregroundStyle(.red)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-        }
-    }
-
     // MARK: - Formatting
 
     private var playbackPositionText: String {
-        "\(formattedWithTenths(ms: spotifyManager.playbackPositionMs)) / \(formatted(ms: spotifyManager.durationMs))"
+        "\(formatted(ms: spotifyManager.playbackPositionMs)) / \(formatted(ms: spotifyManager.durationMs))"
     }
 
     private func formatted(ms: Int) -> String {
         let totalSeconds = ms / 1000
         return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
+}
 
-    private func formattedWithTenths(ms: Int) -> String {
-        let totalTenths = ms / 100
-        let minutes = totalTenths / 600
-        let seconds = (totalTenths / 10) % 60
-        let tenths = totalTenths % 10
-        return String(format: "%d:%02d.%d", minutes, seconds, tenths)
+/// Icon tinted with the brand accent, text in the label's own style — so "connected" is carried
+/// by the checkmark glyph and the words, not by color alone.
+private struct StatusLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 6) {
+            configuration.icon
+                .foregroundStyle(Color.brandCyan)
+            configuration.title
+        }
     }
+}
+
+private extension Color {
+    static let brandCyan = Color(red: 0.0, green: 0.86, blue: 1.0)
+    static let brandBlue = Color(red: 0.12, green: 0.42, blue: 1.0)
 }
 
 #Preview {

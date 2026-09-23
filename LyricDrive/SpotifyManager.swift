@@ -60,8 +60,13 @@ final class SpotifyManager: NSObject, ObservableObject {
 
     private let sessionStore = SpotifySessionStore()
 
+    /// `true` once Spotify has been authorized (a session exists, restored or fresh), whether or
+    /// not App Remote is currently connected. Read-only UI hint for "Connect" vs. "Reconnect".
+    var hasAuthorizedSession: Bool { currentSession != nil }
+
     /// Guards against firing a second `appRemote.connect()` while one is already in flight.
-    private var isConnecting = false
+    /// Published (read-only) so the UI can show a "Connecting…" state.
+    @Published private(set) var isConnecting = false
 
     /// Ensures the local-transport-not-ready retry only ever fires once per connection attempt.
     private var hasRetriedConnection = false
