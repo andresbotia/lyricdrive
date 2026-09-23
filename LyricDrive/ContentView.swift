@@ -98,34 +98,30 @@ struct ContentView: View {
     @ViewBuilder
     private var lyricsView: some View {
         switch lyricsManager.state {
-        case .idle:
-            Color.clear.frame(height: 150)
-        case .loading:
-            Text("Loading lyrics…")
-                .foregroundStyle(.white.opacity(0.5))
-                .frame(height: 150)
-        case .notFound:
-            Text("No lyrics found")
-                .foregroundStyle(.white.opacity(0.5))
-                .frame(height: 150)
-        case .error(let message):
-            Text("Lyrics unavailable: \(message)")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.4))
-                .multilineTextAlignment(.center)
-                .frame(height: 150)
-                .padding(.horizontal)
-        case .plainOnly:
-            Text(lyricsManager.plainLyrics ?? "")
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.8))
-                .multilineTextAlignment(.center)
-                .lineLimit(5)
-                .frame(height: 150)
-                .padding(.horizontal)
         case .synced:
             fiveLineLyricsView
+        case .idle:
+            visualizerFallback(message: "")
+        case .loading:
+            visualizerFallback(message: "Loading lyrics…")
+        case .notFound:
+            visualizerFallback(message: "No lyrics found")
+        case .plainOnly:
+            visualizerFallback(message: "No synced lyrics available")
+        case .error:
+            visualizerFallback(message: "Lyrics unavailable")
         }
+    }
+
+    private func visualizerFallback(message: String) -> some View {
+        NoLyricsVisualizerView(
+            playbackPositionMs: spotifyManager.playbackPositionMs,
+            isPaused: spotifyManager.isPaused,
+            trackURI: spotifyManager.trackURI,
+            artwork: spotifyManager.albumArtwork,
+            message: message
+        )
+        .frame(height: 150)
     }
 
     private var fiveLineLyricsView: some View {
