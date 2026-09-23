@@ -23,7 +23,7 @@ final class CarPlayPresentationController {
     private var lastSnapshot: Snapshot?
     private lazy var placeholderArtwork = Self.makePlaceholderArtwork()
 
-    private static let disconnectedTitle = "LyricDrive"
+    private static let disconnectedTitle = "Spotify Not Connected"
     private static let disconnectedMessage = "Open LyricDrive on your iPhone to connect Spotify."
 
     /// What the lyric area should show. `window` always holds five slots (line -2 … line +2),
@@ -39,7 +39,7 @@ final class CarPlayPresentationController {
     private struct Snapshot: Equatable {
         var isConnected: Bool
         var trackURI: String
-        var albumName: String
+        var trackName: String
         var artistName: String
         var isPaused: Bool
         var artworkID: ObjectIdentifier?
@@ -49,7 +49,8 @@ final class CarPlayPresentationController {
     init(spotifyManager: SpotifyManager, lyricsManager: LyricsManager) {
         self.spotifyManager = spotifyManager
         self.lyricsManager = lyricsManager
-        rootTemplate = CPListTemplate(title: Self.disconnectedTitle, sections: [])
+        // No navigation title: the screen is about the song, not the app name.
+        rootTemplate = CPListTemplate(title: nil, sections: [])
         showDisconnected()
     }
 
@@ -59,7 +60,7 @@ final class CarPlayPresentationController {
         let triggers: [AnyPublisher<Void, Never>] = [
             spotifyManager.$isConnected.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
             spotifyManager.$trackURI.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
-            spotifyManager.$albumName.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
+            spotifyManager.$trackName.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
             spotifyManager.$artistName.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
             spotifyManager.$isPaused.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
             spotifyManager.$albumArtwork.map { $0.map(ObjectIdentifier.init) }.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
@@ -105,7 +106,7 @@ final class CarPlayPresentationController {
         Snapshot(
             isConnected: spotifyManager.isConnected,
             trackURI: spotifyManager.trackURI,
-            albumName: spotifyManager.albumName,
+            trackName: spotifyManager.trackName,
             artistName: spotifyManager.artistName,
             isPaused: spotifyManager.isPaused,
             artworkID: spotifyManager.albumArtwork.map(ObjectIdentifier.init),
@@ -142,7 +143,7 @@ final class CarPlayPresentationController {
     }
 
     /// Ordered from most to least preferred, as `bodyVariants` expects: five lines, three lines,
-    /// then the current line alone. Plain text only — CarPlay owns typography for this area.
+    /// then the current line alone.
     private func bodyVariants(for lyrics: LyricsPresentation) -> [NSAttributedString] {
         switch lyrics {
         case .none:
@@ -150,12 +151,23 @@ final class CarPlayPresentationController {
         case .message(let message):
             return [NSAttributedString(string: message)]
         case .window(let window):
-            return [
-                window.joined(separator: "\n"),
-                window[1...3].joined(separator: "\n"),
-                window[2],
-            ].map { NSAttributedString(string: $0) }
+            return [0...4, 1...3, 2...2].map { lyricText(window, lines: $0) }
         }
+    }
+
+    /// Joins `window[lines]`, leaving the current line (index 2) in the default style and
+    /// marking surrounding lines with the dynamic secondary label color. CarPlay owns typography
+    /// here and may ignore the attribute, in which case this degrades to clean plain text.
+    private func lyricText(_ window: [String], lines: ClosedRange<Int>) -> NSAttributedString {
+        let text = NSMutableAttributedString()
+        for index in lines {
+            if index != lines.lowerBound {
+                text.append(NSAttributedString(string: "\n"))
+            }
+            let attributes: [NSAttributedString.Key: Any] = index == 2 ? [:] : [.foregroundColor: UIColor.secondaryLabel]
+            text.append(NSAttributedString(string: window[index], attributes: attributes))
+        }
+        return text
     }
 
     // MARK: - Template rendering
@@ -223,7 +235,7 @@ final class CarPlayPresentationController {
     }
 
     private func headerTitle(for snapshot: Snapshot) -> String {
-        snapshot.albumName.isEmpty ? Self.disconnectedTitle : snapshot.albumName
+        snapshot.trackName.isEmpty ? "Not Playing" : snapshot.trackName
     }
 
     private func headerSubtitle(for snapshot: Snapshot) -> String? {
