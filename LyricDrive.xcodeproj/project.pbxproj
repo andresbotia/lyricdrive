@@ -6,13 +6,30 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		4142E0F630635B6000712947 /* SpotifyiOS in Frameworks */ = {isa = PBXBuildFile; productRef = 4142E0F530635B6000712947 /* SpotifyiOS */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		41971BA530634FBA00275D8C /* LyricDrive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LyricDrive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		4142E0F830635BF600712947 /* Exceptions for "LyricDrive" folder in "LyricDrive" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 41971BA430634FBA00275D8C /* LyricDrive */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		41971BA730634FBA00275D8C /* LyricDrive */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				4142E0F830635BF600712947 /* Exceptions for "LyricDrive" folder in "LyricDrive" target */,
+			);
 			path = LyricDrive;
 			sourceTree = "<group>";
 		};
@@ -22,6 +39,7 @@
 		41971BA230634FBA00275D8C /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				4142E0F630635B6000712947 /* SpotifyiOS in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -60,6 +78,9 @@
 				41971BA730634FBA00275D8C /* LyricDrive */,
 			);
 			name = LyricDrive;
+			packageProductDependencies = (
+				4142E0F530635B6000712947 /* SpotifyiOS */,
+			);
 			productName = LyricDrive;
 			productReference = 41971BA530634FBA00275D8C /* LyricDrive.app */;
 			productType = "com.apple.product-type.application";
@@ -88,6 +109,9 @@
 			);
 			mainGroup = 41971B9C30634FBA00275D8C;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				4142E0F430635B6000712947 /* XCRemoteSwiftPackageReference "ios-sdk" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 41971BA630634FBA00275D8C /* Products */;
 			projectDirPath = "";
@@ -244,6 +268,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = LyricDrive/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -289,6 +314,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = LyricDrive/Info.plist;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -340,6 +366,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4142E0F430635B6000712947 /* XCRemoteSwiftPackageReference "ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/spotify/ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4142E0F530635B6000712947 /* SpotifyiOS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4142E0F430635B6000712947 /* XCRemoteSwiftPackageReference "ios-sdk" */;
+			productName = SpotifyiOS;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 41971B9D30634FBA00275D8C /* Project object */;
 	validationLevel = 1;
