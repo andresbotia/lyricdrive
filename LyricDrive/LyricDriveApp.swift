@@ -14,9 +14,10 @@ struct LyricDriveApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        let spotifyManager = SpotifyManager()
-        _spotifyManager = StateObject(wrappedValue: spotifyManager)
-        _lyricsManager = StateObject(wrappedValue: LyricsManager(spotifyManager: spotifyManager))
+        // Both managers come from the shared container so the CarPlay scene observes the exact
+        // same instances (one App Remote connection, one playback clock, one lyrics pipeline).
+        _spotifyManager = StateObject(wrappedValue: AppServices.shared.spotifyManager)
+        _lyricsManager = StateObject(wrappedValue: AppServices.shared.lyricsManager)
     }
 
     var body: some Scene {
@@ -33,7 +34,12 @@ struct LyricDriveApp: App {
             case .active:
                 spotifyManager.appDidBecomeActive()
             case .inactive, .background:
-                spotifyManager.appWillResignActive()
+                // While CarPlay is connected it still needs App Remote, so the phone scene
+                // leaving the foreground must not disconnect it. CarPlaySceneDelegate applies
+                // this same disconnect later if CarPlay goes away while the phone is backgrounded.
+                if !AppServices.shared.isCarPlayConnected {
+                    spotifyManager.appWillResignActive()
+                }
             @unknown default:
                 break
             }

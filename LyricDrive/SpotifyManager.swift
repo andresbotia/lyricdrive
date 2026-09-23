@@ -206,6 +206,48 @@ final class SpotifyManager: NSObject, ObservableObject {
         handleDisconnected()
     }
 
+    // MARK: - Playback controls
+
+    /// Transport controls used by the CarPlay scene (and available to any other UI layer). These
+    /// keep `SPTAppRemote`/`playerAPI` encapsulated here rather than handing SDK objects out.
+    /// Player state itself is not written locally — Spotify pushes a fresh
+    /// `playerStateDidChange`, which re-anchors the clock and updates `isPaused` as usual.
+    /// Every control is a safe no-op when App Remote isn't connected.
+    func previousTrack() {
+        guard let playerAPI = connectedPlayerAPI(for: "previousTrack") else { return }
+        playerAPI.skip(toPrevious: playbackControlCallback)
+    }
+
+    func nextTrack() {
+        guard let playerAPI = connectedPlayerAPI(for: "nextTrack") else { return }
+        playerAPI.skip(toNext: playbackControlCallback)
+    }
+
+    func togglePlayPause() {
+        guard let playerAPI = connectedPlayerAPI(for: "togglePlayPause") else { return }
+        if isPaused {
+            playerAPI.resume(playbackControlCallback)
+        } else {
+            playerAPI.pause(playbackControlCallback)
+        }
+    }
+
+    private func connectedPlayerAPI(for action: String) -> SPTAppRemotePlayerAPI? {
+        guard appRemote.isConnected, let playerAPI = appRemote.playerAPI else {
+            print("SpotifyManager: Ignoring \(action) — App Remote not connected")
+            return nil
+        }
+        return playerAPI
+    }
+
+    private var playbackControlCallback: SPTAppRemoteCallback {
+        { [weak self] _, error in
+            if let error {
+                self?.errorMessage = self?.fullDescription(of: error as NSError)
+            }
+        }
+    }
+
     /// Called from the app's `.onOpenURL` handler with the `lyricdrive-login://callback` redirect.
     func handleAuthorizationCallback(url: URL) {
         _ = sessionManager.application(UIApplication.shared, open: url, options: [:])
@@ -221,13 +263,20 @@ final class SpotifyManager: NSObject, ObservableObject {
 
     /// Called when the app becomes active again (e.g. returning from the Spotify app switch).
     func appDidBecomeActive() {
+        reconnectIfAuthorized()
+    }
+
+    /// Reconnects App Remote from the existing session — silently renewing it first if expired —
+    /// without ever starting interactive authorization. A no-op when there's no token or App
+    /// Remote is already connected. Also used when a CarPlay scene connects.
+    func reconnectIfAuthorized() {
         guard accessToken != nil, !appRemote.isConnected else { return }
 
         if let currentSession, currentSession.isExpired {
             print("SpotifyManager: Spotify session renewal requested")
             sessionManager.renewSession()
         } else {
-            print("SpotifyManager: Returning active; reconnecting App Remote")
+            print("SpotifyManager: Reconnecting App Remote")
             connectAppRemote()
         }
     }
