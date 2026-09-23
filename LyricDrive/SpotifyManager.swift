@@ -42,6 +42,13 @@ final class SpotifyManager: NSObject, ObservableObject {
     /// token at all" without depending on App Remote's own connection object.
     private var accessToken: String?
 
+    /// The full authorized session (access + refresh token, expiration, scope), mirrored to and
+    /// restored from the Keychain via `sessionStore` so the user isn't re-prompted on every
+    /// relaunch/rebuild/TestFlight update.
+    private var currentSession: SPTSession?
+
+    private let sessionStore = SpotifySessionStore()
+
     /// Guards against firing a second `appRemote.connect()` while one is already in flight.
     private var isConnecting = false
 
@@ -72,16 +79,69 @@ final class SpotifyManager: NSObject, ObservableObject {
         return appRemote
     }()
 
-    /// Kicks off authorization (if needed) and connects App Remote once a token is available.
+    override init() {
+        super.init()
+        restoreSessionFromKeychain()
+    }
+
+    /// Loads any previously-authorized session from the Keychain and, if present, wires it up
+    /// without ever showing Spotify's interactive authorization screen: a valid session connects
+    /// immediately, an expired one triggers a silent renewal.
+    private func restoreSessionFromKeychain() {
+        guard let restoredSession = sessionStore.loadSession() else {
+            print("SpotifyManager: No stored Spotify session")
+            return
+        }
+
+        print("SpotifyManager: Spotify session restored from Keychain")
+        currentSession = restoredSession
+        sessionManager.session = restoredSession
+        accessToken = restoredSession.accessToken
+        appRemote.connectionParameters.accessToken = restoredSession.accessToken
+
+        if restoredSession.isExpired {
+            print("SpotifyManager: Spotify session renewal requested")
+            sessionManager.renewSession()
+        } else {
+            connectAppRemote()
+        }
+    }
+
+    /// Connects App Remote using a valid/restorable session, silently renews one that has
+    /// expired, or — only when neither is available — starts interactive PKCE authorization.
     func connect() {
         errorMessage = nil
 
-        if accessToken != nil {
+        if let currentSession, !currentSession.isExpired, accessToken != nil {
             connectAppRemote()
+        } else if currentSession != nil {
+            print("SpotifyManager: Spotify session renewal requested")
+            sessionManager.renewSession()
         } else {
-            // Minimum scope required for App Remote playback control.
+            print("SpotifyManager: Spotify authorization required")
             sessionManager.initiateSession(with: [.appRemoteControl], options: .default)
         }
+    }
+
+    /// Logs out of Spotify entirely: disconnects App Remote, discards the in-memory session and
+    /// access token, and deletes the persisted session from the Keychain. No UI currently calls
+    /// this — it exists so a future logout control has a single, correct place to hook into.
+    func disconnectAndForgetSpotify() {
+        stopPlaybackClock()
+        if appRemote.isConnected {
+            appRemote.disconnect()
+        }
+
+        currentSession = nil
+        sessionManager.session = nil
+        accessToken = nil
+        appRemote.connectionParameters.accessToken = nil
+        sessionStore.deleteSession()
+
+        isConnected = false
+        isConnecting = false
+        hasRetriedConnection = false
+        errorMessage = nil
     }
 
     func disconnect() {
@@ -104,7 +164,12 @@ final class SpotifyManager: NSObject, ObservableObject {
 
     /// Called when the app becomes active again (e.g. returning from the Spotify app switch).
     func appDidBecomeActive() {
-        if accessToken != nil, !appRemote.isConnected {
+        guard accessToken != nil, !appRemote.isConnected else { return }
+
+        if let currentSession, currentSession.isExpired {
+            print("SpotifyManager: Spotify session renewal requested")
+            sessionManager.renewSession()
+        } else {
             connectAppRemote()
         }
     }
@@ -244,19 +309,31 @@ final class SpotifyManager: NSObject, ObservableObject {
 extension SpotifyManager: SPTSessionManagerDelegate {
 
     func sessionManager(manager: SPTSessionManager, didInitiate session: SPTSession) {
+        currentSession = session
         accessToken = session.accessToken
+        sessionStore.save(session: session)
         appRemote.connectionParameters.accessToken = session.accessToken
         connectAppRemote()
     }
 
     func sessionManager(manager: SPTSessionManager, didRenew session: SPTSession) {
+        print("SpotifyManager: Spotify session renewed")
+        currentSession = session
         accessToken = session.accessToken
+        sessionStore.save(session: session)
         appRemote.connectionParameters.accessToken = session.accessToken
         connectAppRemote()
     }
 
     func sessionManager(manager: SPTSessionManager, didFailWith error: Error) {
-        errorMessage = fullDescription(of: error as NSError)
+        let description = fullDescription(of: error as NSError)
+        errorMessage = description
+        print("SpotifyManager: Spotify session manager failed — \(description)")
+        // Deliberately not touching `currentSession`/the Keychain here: a temporarily
+        // unreachable network or a transient renewal error must not throw away a previously
+        // good authorization. Only an explicit disconnectAndForgetSpotify() call does that —
+        // interactive re-authorization should be something the user asks for via Connect,
+        // not something triggered automatically by a failed background renewal.
     }
 }
 
