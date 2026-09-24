@@ -11,8 +11,11 @@ import UIKit
 ///
 /// Purely a presentation layer: no authentication, network, Keychain, or playback-clock logic
 /// lives here. It observes only *semantic* changes (track, artwork, lyric line, connection,
-/// paused state) — never the ~10Hz `playbackPositionMs` — and rebuilds the template only when
-/// the derived `Snapshot` actually differs from what's already on screen.
+/// paused state) — never the ~10Hz `playbackPositionMs` — and touches the template only when the
+/// derived header state or lyric rows actually differ from what's already on screen.
+///
+/// Layout (iOS 26.4+): the system details header carries artwork, song, artist and transport
+/// controls; the lyrics are real list rows beneath it. CarPlay owns all positioning.
 final class CarPlayPresentationController {
 
     let rootTemplate: CPListTemplate
@@ -20,30 +23,44 @@ final class CarPlayPresentationController {
     private let spotifyManager: SpotifyManager
     private let lyricsManager: LyricsManager
     private var cancellables = Set<AnyCancellable>()
-    private var lastSnapshot: Snapshot?
+    private var lastHeader: HeaderState?
+    private var lastLyricRows: [LyricRow]?
+    /// The list items currently on screen for the lyric section, kept so a line change can update
+    /// them in place (no list reload) when the row count is unchanged.
+    private var lyricItems: [CPListItem] = []
     private lazy var placeholderArtwork = Self.makePlaceholderArtwork()
 
     private static let disconnectedTitle = "Spotify Not Connected"
     private static let disconnectedMessage = "Open LyricDrive on your iPhone to connect Spotify."
 
-    /// What the lyric area should show. `window` always holds five slots (line -2 … line +2),
-    /// with the current line at index 2.
-    private enum LyricsPresentation: Equatable {
-        case none
-        case message(String)
-        case window([String])
+    /// Lyric lines shown on each side of the current line.
+    private static let contextLineCount = 2
+
+    /// One display-only row in the lyric section.
+    private struct LyricRow: Equatable {
+        enum Role: Equatable {
+            /// The active line: now-playing indicator, full-strength text.
+            case current
+            /// Lines around the active one (or upcoming lines before the first timestamp):
+            /// rendered disabled, which CarPlay draws dimmed.
+            case context
+            /// A status message (loading / no synced lyrics / error): plain, full-strength text.
+            case message
+        }
+
+        var text: String
+        var role: Role
     }
 
-    /// Everything the template depends on. Artwork is compared by identity — `SpotifyManager`
-    /// assigns a new `UIImage` instance exactly when the artwork changes.
-    private struct Snapshot: Equatable {
+    /// Everything the details header depends on. Artwork is compared by identity —
+    /// `SpotifyManager` assigns a new `UIImage` instance exactly when the artwork changes.
+    private struct HeaderState: Equatable {
         var isConnected: Bool
         var trackURI: String
         var trackName: String
         var artistName: String
         var isPaused: Bool
         var artworkID: ObjectIdentifier?
-        var lyrics: LyricsPresentation
     }
 
     init(spotifyManager: SpotifyManager, lyricsManager: LyricsManager) {
@@ -71,9 +88,9 @@ final class CarPlayPresentationController {
         ]
 
         Publishers.MergeMany(triggers)
-            // `@Published` emits during `willSet`; hop to the next main-queue turn so the snapshot
+            // `@Published` emits during `willSet`; hop to the next main-queue turn so the state
             // reads settled values. A burst of changes (e.g. a track change touching several
-            // properties) collapses to one template update via the snapshot comparison.
+            // properties) collapses to at most one header and one lyric update via comparison.
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.refresh() }
             .store(in: &cancellables)
@@ -83,91 +100,81 @@ final class CarPlayPresentationController {
 
     func stop() {
         cancellables.removeAll()
-        lastSnapshot = nil
+        lastHeader = nil
+        lastLyricRows = nil
+        lyricItems = []
     }
 
     // MARK: - State translation
 
     private func refresh() {
-        let snapshot = makeSnapshot()
-        guard snapshot != lastSnapshot else { return }
-        lastSnapshot = snapshot
+        let header = makeHeaderState()
+        let lyricRows = makeLyricRows()
+        let headerChanged = header != lastHeader
+        let lyricsChanged = lyricRows != lastLyricRows
+        guard headerChanged || lyricsChanged else { return }
+        lastHeader = header
+        lastLyricRows = lyricRows
 
-        if !snapshot.isConnected {
+        if !header.isConnected {
             showDisconnected()
         } else if #available(iOS 26.4, *) {
-            showDetailsHeader(for: snapshot)
+            if headerChanged {
+                showDetailsHeader(for: header)
+            }
+            if lyricsChanged {
+                showLyricSection(lyricRows)
+            }
         } else {
-            showListFallback(for: snapshot)
+            showListFallback(header: header, lyricRows: lyricRows)
         }
     }
 
-    private func makeSnapshot() -> Snapshot {
-        Snapshot(
+    private func makeHeaderState() -> HeaderState {
+        HeaderState(
             isConnected: spotifyManager.isConnected,
             trackURI: spotifyManager.trackURI,
             trackName: spotifyManager.trackName,
             artistName: spotifyManager.artistName,
             isPaused: spotifyManager.isPaused,
-            artworkID: spotifyManager.albumArtwork.map(ObjectIdentifier.init),
-            lyrics: makeLyricsPresentation()
+            artworkID: spotifyManager.albumArtwork.map(ObjectIdentifier.init)
         )
     }
 
-    private func makeLyricsPresentation() -> LyricsPresentation {
-        guard !spotifyManager.trackURI.isEmpty else { return .none }
+    private func makeLyricRows() -> [LyricRow] {
+        guard spotifyManager.isConnected, !spotifyManager.trackURI.isEmpty else { return [] }
 
         switch lyricsManager.state {
         case .idle:
-            return .none
+            return []
         case .loading:
-            return .message("Loading lyrics…")
+            return [LyricRow(text: "Loading lyrics…", role: .message)]
         case .plainOnly, .notFound:
-            return .message("No synced lyrics available")
+            return [LyricRow(text: "No synced lyrics available", role: .message)]
         case .error:
-            return .message("Lyrics unavailable")
+            return [LyricRow(text: "Lyrics unavailable", role: .message)]
         case .synced:
             let lines = lyricsManager.lines
-            // Before the first timestamp there's no current line yet: show a note as the
-            // "current" slot with the opening lines queued up below it.
-            let center = lyricsManager.currentLineIndex ?? -1
-            let window = (-2...2).map { offset -> String in
-                let index = center + offset
-                let text = lines.indices.contains(index)
-                    ? lines[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    : ""
-                return offset == 0 && text.isEmpty ? "♪" : text
+            guard !lines.isEmpty else { return [] }
+            let context = Self.contextLineCount
+
+            guard let current = lyricsManager.currentLineIndex else {
+                // Before the first timestamp: just the opening lines, none marked current yet.
+                return lines.prefix(context + 1).map { LyricRow(text: Self.displayText($0.text), role: .context) }
             }
-            return .window(window)
+
+            // Only lines that exist — no placeholder rows at the start or end of the song.
+            let range = max(current - context, 0)...min(current + context, lines.count - 1)
+            return range.map { index in
+                LyricRow(text: Self.displayText(lines[index].text), role: index == current ? .current : .context)
+            }
         }
     }
 
-    /// Ordered from most to least preferred, as `bodyVariants` expects: five lines, three lines,
-    /// then the current line alone.
-    private func bodyVariants(for lyrics: LyricsPresentation) -> [NSAttributedString] {
-        switch lyrics {
-        case .none:
-            return []
-        case .message(let message):
-            return [NSAttributedString(string: message)]
-        case .window(let window):
-            return [0...4, 1...3, 2...2].map { lyricText(window, lines: $0) }
-        }
-    }
-
-    /// Joins `window[lines]`, leaving the current line (index 2) in the default style and
-    /// marking surrounding lines with the dynamic secondary label color. CarPlay owns typography
-    /// here and may ignore the attribute, in which case this degrades to clean plain text.
-    private func lyricText(_ window: [String], lines: ClosedRange<Int>) -> NSAttributedString {
-        let text = NSMutableAttributedString()
-        for index in lines {
-            if index != lines.lowerBound {
-                text.append(NSAttributedString(string: "\n"))
-            }
-            let attributes: [NSAttributedString.Key: Any] = index == 2 ? [:] : [.foregroundColor: UIColor.secondaryLabel]
-            text.append(NSAttributedString(string: window[index], attributes: attributes))
-        }
-        return text
+    /// Empty LRC lines mark instrumental breaks; show them as a note rather than a blank row.
+    private static func displayText(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "♪" : trimmed
     }
 
     // MARK: - Template rendering
@@ -176,52 +183,53 @@ final class CarPlayPresentationController {
         if #available(iOS 26.4, *) {
             rootTemplate.listHeader = nil
         }
+        lyricItems = []
         rootTemplate.emptyViewTitleVariants = [Self.disconnectedTitle]
         rootTemplate.emptyViewSubtitleVariants = [Self.disconnectedMessage]
         rootTemplate.updateSections([])
     }
 
     @available(iOS 26.4, *)
-    private func showDetailsHeader(for snapshot: Snapshot) {
+    private func showDetailsHeader(for header: HeaderState) {
         // Assigning a fresh header is the documented way to update `listHeader` dynamically.
-        // This only happens on semantic changes (a new lyric line every few seconds at most).
+        // Lyrics are deliberately not passed as `bodyVariants`: those are alternatives of which
+        // CarPlay displays exactly one, so they live in the list rows below instead.
         rootTemplate.listHeader = CPListTemplateDetailsHeader(
             thumbnail: CPThumbnailImage(image: spotifyManager.albumArtwork ?? placeholderArtwork),
-            title: headerTitle(for: snapshot),
-            subtitle: headerSubtitle(for: snapshot),
-            bodyVariants: bodyVariants(for: snapshot.lyrics),
-            actionButtons: makeActionButtons(isPaused: snapshot.isPaused)
+            title: headerTitle(for: header),
+            subtitle: headerSubtitle(for: header),
+            actionButtons: makeActionButtons(isPaused: header.isPaused)
         )
         rootTemplate.emptyViewTitleVariants = []
         rootTemplate.emptyViewSubtitleVariants = []
-        if !rootTemplate.sections.isEmpty {
-            rootTemplate.updateSections([])
-        }
     }
 
-    /// Pre-iOS 26.4: no details header, so the same information is laid out as list rows.
-    private func showListFallback(for snapshot: Snapshot) {
-        let nowPlaying = CPListItem(
-            text: headerTitle(for: snapshot),
-            detailText: headerSubtitle(for: snapshot),
-            image: spotifyManager.albumArtwork ?? placeholderArtwork
-        )
-
-        let lyricItems: [CPListItem]
-        switch snapshot.lyrics {
-        case .none:
-            lyricItems = []
-        case .message(let message):
-            lyricItems = [CPListItem(text: message, detailText: nil)]
-        case .window(let window):
-            lyricItems = window.enumerated().map { offset, text in
-                let item = CPListItem(text: text, detailText: nil)
-                item.isPlaying = offset == 2
-                return item
+    /// Updates the lyric section. When the new rows line up one-to-one with the items already on
+    /// screen (the common case: the song advancing a line mid-verse), the existing items are
+    /// updated in place; otherwise the section is replaced.
+    @available(iOS 26.4, *)
+    private func showLyricSection(_ rows: [LyricRow]) {
+        if !lyricItems.isEmpty, lyricItems.count == rows.count {
+            for (item, row) in zip(lyricItems, rows) {
+                configure(item, for: row)
             }
+            return
         }
 
-        let controls = makeControlItems(isPaused: snapshot.isPaused)
+        lyricItems = makeLyricItems(rows)
+        rootTemplate.updateSections(lyricItems.isEmpty ? [] : [CPListSection(items: lyricItems)])
+    }
+
+    /// Pre-iOS 26.4: no details header, so song info and controls are list rows too, around the
+    /// same lyric rows. The whole list is rebuilt on any change.
+    private func showListFallback(header: HeaderState, lyricRows: [LyricRow]) {
+        let nowPlaying = CPListItem(
+            text: headerTitle(for: header),
+            detailText: headerSubtitle(for: header),
+            image: spotifyManager.albumArtwork ?? placeholderArtwork
+        )
+        lyricItems = makeLyricItems(lyricRows)
+        let controls = makeControlItems(isPaused: header.isPaused)
 
         rootTemplate.emptyViewTitleVariants = []
         rootTemplate.emptyViewSubtitleVariants = []
@@ -234,13 +242,36 @@ final class CarPlayPresentationController {
         )
     }
 
-    private func headerTitle(for snapshot: Snapshot) -> String {
-        snapshot.trackName.isEmpty ? "Not Playing" : snapshot.trackName
+    // MARK: - Lyric rows
+
+    private func makeLyricItems(_ rows: [LyricRow]) -> [CPListItem] {
+        rows.map { row in
+            let item = CPListItem(text: row.text, detailText: nil)
+            item.playingIndicatorLocation = .leading
+            // Display only: selecting a lyric does nothing beyond completing the tap.
+            item.handler = { _, completion in completion() }
+            configure(item, for: row)
+            return item
+        }
     }
 
-    private func headerSubtitle(for snapshot: Snapshot) -> String? {
-        if !snapshot.artistName.isEmpty { return snapshot.artistName }
-        return snapshot.trackURI.isEmpty ? "Start playback in Spotify." : nil
+    /// Current line: the system now-playing indicator and normal (enabled) text. Context lines:
+    /// disabled, which CarPlay renders dimmed and non-selectable. Messages: plain enabled text.
+    private func configure(_ item: CPListItem, for row: LyricRow) {
+        if item.text != row.text {
+            item.setText(row.text)
+        }
+        item.isPlaying = row.role == .current
+        item.isEnabled = row.role != .context
+    }
+
+    private func headerTitle(for header: HeaderState) -> String {
+        header.trackName.isEmpty ? "Not Playing" : header.trackName
+    }
+
+    private func headerSubtitle(for header: HeaderState) -> String? {
+        if !header.artistName.isEmpty { return header.artistName }
+        return header.trackURI.isEmpty ? "Start playback in Spotify." : nil
     }
 
     // MARK: - Controls
