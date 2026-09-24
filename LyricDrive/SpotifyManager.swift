@@ -71,6 +71,20 @@ final class SpotifyManager: NSObject, ObservableObject {
     /// Ensures the local-transport-not-ready retry only ever fires once per connection attempt.
     private var hasRetriedConnection = false
 
+    /// `true` while a bounded automatic reconnect sequence started for CarPlay is in progress
+    /// (see `reconnectForCarPlay()`). Read-only for UI, e.g. to show "Connecting…" rather than a
+    /// reconnect prompt while retries are still pending.
+    @Published private(set) var isAutoReconnecting = false
+
+    /// Delays before each remaining automatic retry of the current CarPlay reconnect sequence.
+    private var autoReconnectDelays: [TimeInterval] = []
+    private var autoReconnectTask: Task<Void, Never>?
+
+    /// Spotify's local transport often only comes up once the car has resumed playback, which can
+    /// take several seconds after CarPlay connects. Attempts: immediately, then after these
+    /// delays (≈1.5s, 4.5s, 10.5s after the first failure) — four in total.
+    private static let carPlayRetryDelays: [TimeInterval] = [1.5, 3, 6]
+
     /// Drives the ~10Hz local playback clock. Only runs while App Remote is connected.
     private var playbackClockTimer: Timer?
 
@@ -152,6 +166,7 @@ final class SpotifyManager: NSObject, ObservableObject {
     /// access token, and deletes the persisted session from the Keychain. No UI currently calls
     /// this — it exists so a future logout control has a single, correct place to hook into.
     func disconnectAndForgetSpotify() {
+        cancelAutomaticReconnect()
         stopPlaybackClock()
         if appRemote.isConnected {
             appRemote.disconnect()
@@ -284,6 +299,30 @@ final class SpotifyManager: NSObject, ObservableObject {
             print("SpotifyManager: Reconnecting App Remote")
             connectAppRemote()
         }
+    }
+
+    /// Reconnect used by the CarPlay scene (on connect and whenever it becomes active again).
+    /// Like `reconnectIfAuthorized()` — silent, never OAuth, never an app switch — but if the
+    /// failure is specifically Spotify's local transport not being ready, it retries a few times
+    /// on `carPlayRetryDelays` before falling back to the explicit "Reconnect Spotify" state.
+    /// A no-op without a session, when already connected, or while a sequence is running.
+    func reconnectForCarPlay() {
+        guard accessToken != nil, !appRemote.isConnected, !isAutoReconnecting else { return }
+        print("SpotifyManager: CarPlay reconnect sequence started")
+        isAutoReconnecting = true
+        autoReconnectDelays = Self.carPlayRetryDelays
+        // If a connect is already in flight (e.g. the launch-time Keychain restore), its failure
+        // will feed into the retry sequence above instead of starting a new attempt here.
+        reconnectIfAuthorized()
+    }
+
+    /// Stops any pending automatic retry. Called when CarPlay disconnects, on success, and when
+    /// the session is dropped or can't be renewed.
+    func cancelAutomaticReconnect() {
+        autoReconnectTask?.cancel()
+        autoReconnectTask = nil
+        autoReconnectDelays = []
+        isAutoReconnecting = false
     }
 
     /// The single place that actually calls `appRemote.connect()`. Verifies a token exists,
@@ -459,6 +498,7 @@ extension SpotifyManager: SPTSessionManagerDelegate {
     }
 
     func sessionManager(manager: SPTSessionManager, didFailWith error: Error) {
+        cancelAutomaticReconnect()
         let description = fullDescription(of: error as NSError)
         print("SpotifyManager: Spotify session manager failed — \(description)")
 
@@ -483,6 +523,7 @@ extension SpotifyManager: SPTAppRemoteDelegate {
 
     func appRemoteDidEstablishConnection(_ appRemote: SPTAppRemote) {
         print("SpotifyManager: Spotify App Remote connected")
+        cancelAutomaticReconnect()
         isConnected = true
         isConnecting = false
         hasRetriedConnection = false
@@ -516,11 +557,27 @@ extension SpotifyManager: SPTAppRemoteDelegate {
         guard isLocalTransportNotReadyError(nsError) else {
             // A genuine connection error unrelated to the transport-asleep case — surface it
             // as-is, and don't touch the wake-state UI.
+            cancelAutomaticReconnect()
             errorMessage = description
             return
         }
 
         print("SpotifyManager: Spotify App Remote transport unavailable")
+
+        if isAutoReconnecting, !autoReconnectDelays.isEmpty {
+            // CarPlay sequence: wait for Spotify's transport (typically woken by the car resuming
+            // playback) instead of asking the driver to tap Reconnect straight away. When the
+            // delays run out, the `else` branch below surfaces the explicit Reconnect state.
+            let delay = autoReconnectDelays.removeFirst()
+            hasRetriedConnection = true
+            print("SpotifyManager: CarPlay reconnect retry in \(delay)s (\(autoReconnectDelays.count) more after that)")
+            autoReconnectTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled, let self, self.isAutoReconnecting else { return }
+                self.connectAppRemote(isRetry: true)
+            }
+            return
+        }
 
         if !hasRetriedConnection {
             // Give it exactly one short chance to settle — this covers the common case where
@@ -535,6 +592,7 @@ extension SpotifyManager: SPTAppRemoteDelegate {
             // The one retry also hit a sleeping transport — stop here rather than repeatedly
             // invoking the SDK wake against a process that isn't listening, and let the user
             // explicitly trigger it again.
+            cancelAutomaticReconnect()
             isWakingSpotify = false
             requiresSpotifyWake = true
             errorMessage = "Spotify needs to reconnect. Tap Reconnect Spotify to continue."

@@ -24,9 +24,10 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         let services = AppServices.shared
         services.isCarPlayConnected = true
         // The phone scene may have resigned active (and disconnected App Remote) just before
-        // this callback arrived — there's no ordering guarantee between the two scenes. Recover
-        // via the same silent reconnect the phone uses on becoming active; never OAuth.
-        services.spotifyManager.reconnectIfAuthorized()
+        // this callback arrived — there's no ordering guarantee between the two scenes — and
+        // Spotify's local transport is often still asleep this early in a drive. Reconnect
+        // silently with a few bounded retries; never OAuth, never an automatic app switch.
+        services.spotifyManager.reconnectForCarPlay()
 
         let presentationController = CarPlayPresentationController(
             spotifyManager: services.spotifyManager,
@@ -44,6 +45,12 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         presentationController.start()
     }
 
+    /// The driver came back to LyricDrive on the car screen — often right after starting music
+    /// in Spotify's own CarPlay app, which wakes its transport. Try again (bounded, silent).
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        AppServices.shared.spotifyManager.reconnectForCarPlay()
+    }
+
     func templateApplicationScene(
         _ templateApplicationScene: CPTemplateApplicationScene,
         didDisconnectInterfaceController interfaceController: CPInterfaceController
@@ -57,6 +64,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
         let services = AppServices.shared
         services.isCarPlayConnected = false
+        services.spotifyManager.cancelAutomaticReconnect()
         // Restore normal phone behavior: if the iPhone UI isn't in the foreground, apply the
         // resign-active disconnect that was skipped while CarPlay was connected.
         if !isPhoneSceneForegroundActive {
