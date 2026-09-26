@@ -458,10 +458,8 @@ private extension Color {
 private struct HelpAboutView: View {
     @Environment(\.dismiss) private var dismiss
 
-    // Add production destinations here when they exist. Nil omits the link entirely, so the
-    // shipped UI never sends someone to a placeholder or an unmaintained address.
-    private static let privacyPolicyURL: URL? = nil
-    private static let supportURL: URL? = nil
+    private static let privacyPolicyURL = URL(string: "https://andresbotia.github.io/lyricdrive/privacy")!
+    private static let supportURL = URL(string: "https://andresbotia.github.io/lyricdrive/support")!
 
     private var versionText: String {
         let info = Bundle.main.infoDictionary
@@ -496,15 +494,9 @@ private struct HelpAboutView: View {
                     Text("Set up LyricDrive before driving. Use CarPlay controls only when conditions allow, and always keep your attention on the road.")
                 }
 
-                if Self.privacyPolicyURL != nil || Self.supportURL != nil {
-                    Section("Links") {
-                        if let url = Self.privacyPolicyURL {
-                            Link("Privacy Policy", destination: url)
-                        }
-                        if let url = Self.supportURL {
-                            Link("Support", destination: url)
-                        }
-                    }
+                Section("Links") {
+                    Link("Privacy Policy", destination: Self.privacyPolicyURL)
+                    Link("Support", destination: Self.supportURL)
                 }
 
                 Section("Version") {
