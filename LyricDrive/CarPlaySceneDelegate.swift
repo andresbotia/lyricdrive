@@ -30,7 +30,6 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         services.spotifyManager.reconnectForCarPlay()
 
         let presentationController = CarPlayPresentationController(
-            interfaceController: interfaceController,
             spotifyManager: services.spotifyManager,
             lyricsManager: services.lyricsManager
         )

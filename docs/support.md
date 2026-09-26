@@ -14,7 +14,7 @@ permalink: /support
 
 ## Using CarPlay
 
-Open LyricDrive in CarPlay. **Now Playing** opens the system playback experience, with music controls and track information. **Lyrics** displays synchronized lyrics when available and updates automatically as songs change.
+Open LyricDrive in CarPlay. **Now Playing** shows the song title, artist, album, artwork, and Previous / Play-Pause / Next controls. Spotify continues to play the audio. **Lyrics** displays synchronized lyrics when available and updates automatically as songs change.
 
 ## Spotify won't reconnect
 

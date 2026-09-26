@@ -5,7 +5,6 @@
 
 import CarPlay
 import Combine
-import MediaPlayer
 import UIKit
 
 /// Translates shared `SpotifyManager`/`LyricsManager` state into CarPlay templates.
@@ -15,8 +14,9 @@ import UIKit
 /// paused state) — never the ~10Hz `playbackPositionMs` — and touches a template only when its
 /// derived state actually differs from what's already on screen.
 ///
-/// Structure: a stable two-tab root. The Now Playing list launches the shared system template;
-/// popping it returns to the same tab bar. Lyrics is always the other tab.
+/// Structure: a stable two-tab root. Now Playing displays Spotify metadata and controls
+/// directly in a list. Spotify owns audio playback and system Now Playing; this companion
+/// does not publish MediaPlayer metadata or register system remote commands.
 /// - **Lyrics** — a list template of up to five display-only lyric rows, or one status row.
 /// CarPlay owns all positioning.
 final class CarPlayPresentationController {
@@ -25,19 +25,10 @@ final class CarPlayPresentationController {
 
     private let nowPlayingTemplate: CPListTemplate
     private let lyricsTemplate: CPListTemplate
-    private let interfaceController: CPInterfaceController
-    private let systemNowPlaying = CPNowPlayingTemplate.shared
-    private let infoCenter = MPNowPlayingInfoCenter.default()
-    private let remoteCommands = MPRemoteCommandCenter.shared()
-    private var commandTokens: [(MPRemoteCommand, Any)] = []
-
     private let spotifyManager: SpotifyManager
     private let lyricsManager: LyricsManager
     private var cancellables = Set<AnyCancellable>()
     private var lastHeader: HeaderState?
-    private var lastPublishedHeader: HeaderState?
-    private var lastPlaybackAnchorRevision: Int?
-    private var usingLegacyNowPlaying = false
     private var lastLyricRows: [LyricRow]?
     /// The items currently on screen in the Lyrics tab, kept so a line change can update them in
     /// place (no list reload) when the row count is unchanged.
@@ -76,13 +67,11 @@ final class CarPlayPresentationController {
         var trackName: String
         var artistName: String
         var albumName: String
-        var durationMs: Int
         var isPaused: Bool
         var artworkID: ObjectIdentifier?
     }
 
-    init(interfaceController: CPInterfaceController, spotifyManager: SpotifyManager, lyricsManager: LyricsManager) {
-        self.interfaceController = interfaceController
+    init(spotifyManager: SpotifyManager, lyricsManager: LyricsManager) {
         self.spotifyManager = spotifyManager
         self.lyricsManager = lyricsManager
 
@@ -101,7 +90,6 @@ final class CarPlayPresentationController {
     // MARK: - Lifecycle
 
     func start() {
-        installRemoteCommands()
         let triggers: [AnyPublisher<Void, Never>] = [
             spotifyManager.$isConnected.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
             spotifyManager.$isAutoReconnecting.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
@@ -109,9 +97,7 @@ final class CarPlayPresentationController {
             spotifyManager.$trackName.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
             spotifyManager.$artistName.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
             spotifyManager.$albumName.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
-            spotifyManager.$durationMs.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
             spotifyManager.$isPaused.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
-            spotifyManager.$playbackAnchorRevision.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
             spotifyManager.$albumArtwork.map { $0.map(ObjectIdentifier.init) }.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
             lyricsManager.$state.map { _ in }.eraseToAnyPublisher(),
             lyricsManager.$lines.removeDuplicates().map { _ in }.eraseToAnyPublisher(),
@@ -132,13 +118,7 @@ final class CarPlayPresentationController {
 
     func stop() {
         cancellables.removeAll()
-        for (command, token) in commandTokens { command.removeTarget(token) }
-        commandTokens.removeAll()
-        infoCenter.nowPlayingInfo = nil
         lastHeader = nil
-        lastPublishedHeader = nil
-        lastPlaybackAnchorRevision = nil
-        usingLegacyNowPlaying = false
         lastLyricRows = nil
         lyricItems = []
     }
@@ -151,16 +131,7 @@ final class CarPlayPresentationController {
         let header = makeHeaderState()
         if header != lastHeader {
             lastHeader = header
-            if usingLegacyNowPlaying && header.isConnected {
-                showLegacyNowPlaying()
-            } else {
-                renderNowPlaying(header)
-            }
-        }
-        if header != lastPublishedHeader || lastPlaybackAnchorRevision != spotifyManager.playbackAnchorRevision {
-            publishNowPlayingInfo(header)
-            lastPublishedHeader = header
-            lastPlaybackAnchorRevision = spotifyManager.playbackAnchorRevision
+            renderNowPlaying(header)
         }
 
         let lyricRows = makeLyricRows()
@@ -178,7 +149,6 @@ final class CarPlayPresentationController {
             trackName: spotifyManager.trackName,
             artistName: spotifyManager.artistName,
             albumName: spotifyManager.albumName,
-            durationMs: spotifyManager.durationMs,
             isPaused: spotifyManager.isPaused,
             artworkID: spotifyManager.albumArtwork.map(ObjectIdentifier.init)
         )
@@ -254,12 +224,11 @@ final class CarPlayPresentationController {
 
     // MARK: - Now Playing tab
 
+    /// These rows are the destination, not a launcher for CPNowPlayingTemplate. The default
+    /// MPNowPlayingInfoCenter belongs to this app, not Spotify; supplying its dictionary does
+    /// not make a non-playing companion the system's active Now Playing app.
     private func renderNowPlaying(_ header: HeaderState) {
-        if !header.isConnected {
-            usingLegacyNowPlaying = false
-            if #available(iOS 26.4, *) {
-                nowPlayingTemplate.listHeader = nil
-            }
+        guard header.isConnected else {
             nowPlayingTemplate.emptyViewTitleVariants = [header.isAutoReconnecting ? Self.connectingTitle : Self.disconnectedTitle]
             nowPlayingTemplate.emptyViewSubtitleVariants = header.isAutoReconnecting ? [] : [Self.disconnectedMessage]
             nowPlayingTemplate.updateSections([])
@@ -269,106 +238,37 @@ final class CarPlayPresentationController {
         nowPlayingTemplate.emptyViewTitleVariants = []
         nowPlayingTemplate.emptyViewSubtitleVariants = []
 
-        if #available(iOS 26.4, *) { nowPlayingTemplate.listHeader = nil }
-        let launcher = CPListItem(
-            text: headerTitle(for: header),
-            detailText: headerSubtitle(for: header),
-            image: spotifyManager.albumArtwork ?? placeholderArtwork
-        )
-        launcher.accessoryType = .disclosureIndicator
-        launcher.handler = { [weak self] _, completion in
-            self?.openSystemNowPlaying()
-            completion()
-        }
-        nowPlayingTemplate.updateSections([CPListSection(items: [launcher])])
-    }
-
-    private func openSystemNowPlaying() {
-        interfaceController.pushTemplate(systemNowPlaying, animated: true) { [weak self] success, error in
-            guard !success else { return }
-            print("CarPlay: Could not open system Now Playing — \(String(describing: error))")
-            self?.showLegacyNowPlaying()
-        }
-    }
-
-    /// If a particular CarPlay host rejects the shared template, keep the existing list-based
-    /// presentation available. This also retains the pre-26.4 list-row implementation.
-    private func showLegacyNowPlaying() {
-        usingLegacyNowPlaying = true
-        let header = makeHeaderState()
-        if #available(iOS 26.4, *) {
-            nowPlayingTemplate.listHeader = CPListTemplateDetailsHeader(
-                thumbnail: CPThumbnailImage(image: spotifyManager.albumArtwork ?? placeholderArtwork),
-                title: headerTitle(for: header),
-                subtitle: headerSubtitle(for: header),
-                actionButtons: makeActionButtons(isPaused: header.isPaused)
-            )
-            nowPlayingTemplate.updateSections([])
-        } else {
-            let item = CPListItem(text: headerTitle(for: header), detailText: headerSubtitle(for: header), image: spotifyManager.albumArtwork ?? placeholderArtwork)
-            nowPlayingTemplate.updateSections([
-                CPListSection(items: [item]),
-                CPListSection(items: makeControlItems(isPaused: header.isPaused)),
-            ])
-        }
-    }
-
-    private func headerTitle(for header: HeaderState) -> String {
-        header.trackName.isEmpty ? "Not Playing" : header.trackName
-    }
-
-    private func headerSubtitle(for header: HeaderState) -> String? {
-        if !header.artistName.isEmpty { return header.artistName }
-        return header.trackURI.isEmpty ? "Start playback in Spotify." : nil
-    }
-
-    // MARK: - System Now Playing
-
-    private func publishNowPlayingInfo(_ header: HeaderState) {
-        guard header.isConnected, !header.trackURI.isEmpty else {
-            infoCenter.nowPlayingInfo = nil
+        guard !header.trackURI.isEmpty else {
+            nowPlayingTemplate.updateSections([CPListSection(items: [
+                makeMetadataItem("Not Playing", detailText: "Start playback in Spotify.")
+            ])])
             return
         }
 
-        var info: [String: Any] = [
-            MPMediaItemPropertyTitle: header.trackName,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: Double(spotifyManager.playbackPositionMs) / 1000,
-            MPNowPlayingInfoPropertyPlaybackRate: header.isPaused ? 0.0 : 1.0,
+        // Give title and artist their own rows. Long values use both text fields rather than
+        // competing for the single detail line of a small combined title/artist launcher.
+        // Keep the original strings; the host still determines the available display width.
+        let (title, titleDetail) = Self.splitLyric(header.trackName.isEmpty ? "Unknown Title" : header.trackName)
+        let (artist, artistDetail) = Self.splitLyric(header.artistName.isEmpty ? "Unknown Artist" : header.artistName)
+        var metadata = [
+            makeMetadataItem(title, detailText: titleDetail, image: spotifyManager.albumArtwork ?? placeholderArtwork),
+            makeMetadataItem(artist, detailText: artistDetail),
         ]
-        if !header.artistName.isEmpty { info[MPMediaItemPropertyArtist] = header.artistName }
-        if !header.albumName.isEmpty { info[MPMediaItemPropertyAlbumTitle] = header.albumName }
-        if header.durationMs > 0 { info[MPMediaItemPropertyPlaybackDuration] = Double(header.durationMs) / 1000 }
-        if let image = spotifyManager.albumArtwork {
-            // Capture this track's image. The system requests its display size through the
-            // artwork handler; no second fetch or app-defined CarPlay rendering size is needed.
-            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        if !header.albumName.isEmpty {
+            let (album, albumDetail) = Self.splitLyric(header.albumName)
+            metadata.append(makeMetadataItem(album, detailText: albumDetail))
         }
-        // Build from scratch so an artwork callback pending on the next track cannot leave the
-        // previous track's image in the system metadata.
-        infoCenter.nowPlayingInfo = info
+        nowPlayingTemplate.updateSections([
+            CPListSection(items: metadata),
+            CPListSection(items: makeControlItems(isPaused: header.isPaused)),
+        ])
     }
 
-    private func installRemoteCommands() {
-        let controls: [(MPRemoteCommand, () -> Void)] = [
-            (remoteCommands.previousTrackCommand, { [weak self] in self?.spotifyManager.previousTrack() }),
-            (remoteCommands.playCommand, { [weak self] in
-                guard let self, self.spotifyManager.isPaused else { return }
-                self.spotifyManager.togglePlayPause()
-            }),
-            (remoteCommands.pauseCommand, { [weak self] in
-                guard let self, !self.spotifyManager.isPaused else { return }
-                self.spotifyManager.togglePlayPause()
-            }),
-            (remoteCommands.nextTrackCommand, { [weak self] in self?.spotifyManager.nextTrack() }),
-        ]
-        for (command, action) in controls {
-            let token = command.addTarget { [weak self] _ in
-                guard self?.spotifyManager.isConnected == true else { return .commandFailed }
-                action()
-                return .success
-            }
-            commandTokens.append((command, token))
-        }
+    private func makeMetadataItem(_ text: String, detailText: String?, image: UIImage? = nil) -> CPListItem {
+        let item = CPListItem(text: text, detailText: detailText, image: image)
+        // Display only. Completing a tap never pushes a template or sends a playback command.
+        item.handler = { _, completion in completion() }
+        return item
     }
 
     // MARK: - Lyrics tab
@@ -413,25 +313,6 @@ final class CarPlayPresentationController {
         case previous, playPause, next
     }
 
-    /// Previous / Play-Pause / Next, trimmed to what the header can display — Play/Pause is kept
-    /// first, then Next, then Previous.
-    @available(iOS 26.4, *)
-    private func makeActionButtons(isPaused: Bool) -> [CPButton] {
-        let controls: [Control]
-        switch CPListTemplateDetailsHeader.maximumActionButtonCount {
-        case 3...: controls = [.previous, .playPause, .next]
-        case 2: controls = [.playPause, .next]
-        case 1: controls = [.playPause]
-        default: controls = []
-        }
-
-        return controls.map { control in
-            CPButton(image: symbolImage(for: control, isPaused: isPaused)) { [weak self] _ in
-                self?.perform(control)
-            }
-        }
-    }
-
     private func makeControlItems(isPaused: Bool) -> [CPListItem] {
         [Control.previous, .playPause, .next].map { control in
             let item = CPListItem(
@@ -448,6 +329,7 @@ final class CarPlayPresentationController {
     }
 
     private func perform(_ control: Control) {
+        guard spotifyManager.isConnected, !spotifyManager.trackURI.isEmpty else { return }
         switch control {
         case .previous: spotifyManager.previousTrack()
         case .playPause: spotifyManager.togglePlayPause()
