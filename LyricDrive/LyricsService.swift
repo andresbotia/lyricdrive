@@ -106,6 +106,14 @@ final class LyricsService {
     func fetchLyrics(trackName: String, artistName: String, albumName: String, durationMs: Int) async -> LyricsFetchResult {
         guard !trackName.isEmpty, !artistName.isEmpty else { return .notFound }
 
+        #if DEBUG && targetEnvironment(simulator)
+        if CarPlayDemo.isEnabled, let demoResult = CarPlayDemo.lyricsResult(trackName: trackName, artistName: artistName) {
+            // Brief pause so the "Loading lyrics…" state is visible, then no network at all.
+            try? await Task.sleep(for: .milliseconds(600))
+            return demoResult
+        }
+        #endif
+
         let query = LyricsQuery(
             trackName: trackName,
             artistName: artistName,

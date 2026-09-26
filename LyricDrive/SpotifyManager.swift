@@ -40,6 +40,10 @@ final class SpotifyManager: NSObject, ObservableObject {
     /// on every clock tick, never advanced by blindly adding a fixed step per timer fire.
     @Published private(set) var playbackPositionMs = 0
 
+    /// Changes only when Spotify supplies a fresh playback anchor (including seeks), not on
+    /// interpolation ticks. CarPlay uses this to update the system's elapsed-time anchor.
+    @Published private(set) var playbackAnchorRevision = 0
+
     /// The last playback position Spotify itself reported, i.e. the authoritative anchor.
     private var authoritativePositionMs: Int = 0
 
@@ -88,6 +92,12 @@ final class SpotifyManager: NSObject, ObservableObject {
     /// Drives the ~10Hz local playback clock. Only runs while App Remote is connected.
     private var playbackClockTimer: Timer?
 
+    #if DEBUG && targetEnvironment(simulator)
+    /// Index into `CarPlayDemo.tracks` while the DEBUG simulator demo is running (see bottom).
+    private var demoTrackIndex: Int?
+    private var demoAutoAdvance: AnyCancellable?
+    #endif
+
     private lazy var configuration: SPTConfiguration = {
         let configuration = SPTConfiguration(clientID: Self.clientID, redirectURL: Self.redirectURL)
         // Spotify's official sample requires a non-nil (can be blank) playURI: without it, the
@@ -119,6 +129,12 @@ final class SpotifyManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        #if DEBUG && targetEnvironment(simulator)
+        if CarPlayDemo.isEnabled {
+            startCarPlayDemo()
+            return
+        }
+        #endif
         restoreSessionFromKeychain()
     }
 
@@ -234,16 +250,25 @@ final class SpotifyManager: NSObject, ObservableObject {
     /// `playerStateDidChange`, which re-anchors the clock and updates `isPaused` as usual.
     /// Every control is a safe no-op when App Remote isn't connected.
     func previousTrack() {
+        #if DEBUG && targetEnvironment(simulator)
+        if demoTrackIndex != nil { return demoPreviousTrack() }
+        #endif
         guard let playerAPI = connectedPlayerAPI(for: "previousTrack") else { return }
         playerAPI.skip(toPrevious: playbackControlCallback)
     }
 
     func nextTrack() {
+        #if DEBUG && targetEnvironment(simulator)
+        if demoTrackIndex != nil { return demoNextTrack() }
+        #endif
         guard let playerAPI = connectedPlayerAPI(for: "nextTrack") else { return }
         playerAPI.skip(toNext: playbackControlCallback)
     }
 
     func togglePlayPause() {
+        #if DEBUG && targetEnvironment(simulator)
+        if demoTrackIndex != nil { return demoTogglePlayPause() }
+        #endif
         guard let playerAPI = connectedPlayerAPI(for: "togglePlayPause") else { return }
         if isPaused {
             playerAPI.resume(playbackControlCallback)
@@ -379,6 +404,7 @@ final class SpotifyManager: NSObject, ObservableObject {
 
         // Reflect the new anchor immediately rather than waiting for the next timer tick.
         updateInterpolatedPosition()
+        playbackAnchorRevision &+= 1
     }
 
     /// Fetches artwork for `track` via App Remote's image API (no Web API involved). Guards
@@ -620,3 +646,75 @@ extension SpotifyManager: SPTAppRemotePlayerStateDelegate {
         applyAuthoritativeState(from: playerState)
     }
 }
+
+// MARK: - DEBUG simulator demo
+
+#if DEBUG && targetEnvironment(simulator)
+/// Fake playback for `--carplay-demo` (see `CarPlayDemo`). Publishes demo tracks through the same
+/// properties and playback clock real Spotify state uses, so every UI path runs unchanged.
+/// App Remote is never touched: no access token exists, so all reconnect paths stay no-ops.
+extension SpotifyManager {
+
+    fileprivate func startCarPlayDemo() {
+        print("SpotifyManager: --carplay-demo active (DEBUG simulator only)")
+        isConnected = true
+        loadDemoTrack(at: 0, playing: true)
+        startPlaybackClock()
+
+        // Auto-advance at the end of each track, like a playlist would.
+        demoAutoAdvance = $playbackPositionMs.sink { [weak self] positionMs in
+            guard let self, !self.isPaused, self.durationMs > 0, positionMs >= self.durationMs else { return }
+            let finishedTrack = self.demoTrackIndex
+            // Deferred: this fires inside the property's willSet.
+            DispatchQueue.main.async {
+                guard self.demoTrackIndex == finishedTrack, self.playbackPositionMs >= self.durationMs else { return }
+                self.demoNextTrack()
+            }
+        }
+    }
+
+    private func loadDemoTrack(at index: Int, playing: Bool) {
+        let track = CarPlayDemo.tracks[index]
+        demoTrackIndex = index
+        // Same order as `applyAuthoritativeState`: metadata before `trackURI`.
+        trackName = track.name
+        artistName = track.artist
+        albumName = track.album
+        durationMs = track.durationMs
+        isPaused = !playing
+        albumArtwork = CarPlayDemo.artwork(for: track)
+        trackURI = track.uri
+        seekDemo(toMs: 0)
+    }
+
+    private func seekDemo(toMs positionMs: Int) {
+        authoritativePositionMs = positionMs
+        authoritativeTimestamp = ProcessInfo.processInfo.systemUptime
+        updateInterpolatedPosition()
+        playbackAnchorRevision &+= 1
+    }
+
+    fileprivate func demoTogglePlayPause() {
+        // Re-anchor at the current position so pausing freezes, and resuming continues, from here.
+        let positionMs = playbackPositionMs
+        isPaused.toggle()
+        seekDemo(toMs: positionMs)
+    }
+
+    fileprivate func demoNextTrack() {
+        guard let index = demoTrackIndex else { return }
+        loadDemoTrack(at: (index + 1) % CarPlayDemo.tracks.count, playing: !isPaused)
+    }
+
+    /// Like Spotify: restarts the current track if more than 3s in, otherwise goes back one.
+    fileprivate func demoPreviousTrack() {
+        guard let index = demoTrackIndex else { return }
+        if playbackPositionMs > 3_000 {
+            seekDemo(toMs: 0)
+        } else {
+            let count = CarPlayDemo.tracks.count
+            loadDemoTrack(at: (index + count - 1) % count, playing: !isPaused)
+        }
+    }
+}
+#endif
