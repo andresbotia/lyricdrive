@@ -15,7 +15,7 @@ import UIKit
 /// derived state actually differs from what's already on screen.
 ///
 /// Structure: a stable two-tab root. Now Playing displays Spotify metadata and controls
-/// directly in a list. Spotify owns audio playback and system Now Playing; this companion
+/// in a details header (or list rows on older iOS). Spotify owns audio playback; this companion
 /// does not publish MediaPlayer metadata or register system remote commands.
 /// - **Lyrics** — a list template of up to five display-only lyric rows, or one status row.
 /// CarPlay owns all positioning.
@@ -224,11 +224,10 @@ final class CarPlayPresentationController {
 
     // MARK: - Now Playing tab
 
-    /// These rows are the destination, not a launcher for CPNowPlayingTemplate. The default
-    /// MPNowPlayingInfoCenter belongs to this app, not Spotify; supplying its dictionary does
-    /// not make a non-playing companion the system's active Now Playing app.
+    /// LyricDrive owns this presentation; Spotify continues to own system playback.
     private func renderNowPlaying(_ header: HeaderState) {
         guard header.isConnected else {
+            if #available(iOS 26.4, *) { nowPlayingTemplate.listHeader = nil }
             nowPlayingTemplate.emptyViewTitleVariants = [header.isAutoReconnecting ? Self.connectingTitle : Self.disconnectedTitle]
             nowPlayingTemplate.emptyViewSubtitleVariants = header.isAutoReconnecting ? [] : [Self.disconnectedMessage]
             nowPlayingTemplate.updateSections([])
@@ -239,12 +238,19 @@ final class CarPlayPresentationController {
         nowPlayingTemplate.emptyViewSubtitleVariants = []
 
         guard !header.trackURI.isEmpty else {
+            if #available(iOS 26.4, *) { nowPlayingTemplate.listHeader = nil }
             nowPlayingTemplate.updateSections([CPListSection(items: [
                 makeMetadataItem("Not Playing", detailText: "Start playback in Spotify.")
             ])])
             return
         }
 
+        if #available(iOS 26.4, *) {
+            renderDetailsHeader(header)
+            return
+        }
+
+        // Older iOS retains the supported list-row fallback.
         // Give title and artist their own rows. Long values use both text fields rather than
         // competing for the single detail line of a small combined title/artist launcher.
         // Keep the original strings; the host still determines the available display width.
@@ -262,6 +268,31 @@ final class CarPlayPresentationController {
             CPListSection(items: metadata),
             CPListSection(items: makeControlItems(isPaused: header.isPaused)),
         ])
+    }
+
+    @available(iOS 26.4, *)
+    private func renderDetailsHeader(_ header: HeaderState) {
+        let title = header.trackName.isEmpty ? "Unknown Title" : header.trackName
+        let artist = header.artistName.isEmpty ? "Unknown Artist" : header.artistName
+        let image = spotifyManager.albumArtwork ?? placeholderArtwork
+        let buttons = makeHeaderButtons(isPaused: header.isPaused)
+
+        if let details = nowPlayingTemplate.listHeader {
+            details.title = title
+            details.subtitle = artist
+            details.thumbnail.image = image
+            details.actionButtons = buttons
+        } else {
+            nowPlayingTemplate.listHeader = CPListTemplateDetailsHeader(
+                thumbnail: CPThumbnailImage(image: image),
+                title: title,
+                subtitle: artist,
+                actionButtons: buttons
+            )
+        }
+        // Omit album/body text to reserve the host's space for artwork, title, artist, and
+        // controls. No list rows compete with the header or place controls below the fold.
+        if nowPlayingTemplate.sectionCount != 0 { nowPlayingTemplate.updateSections([]) }
     }
 
     private func makeMetadataItem(_ text: String, detailText: String?, image: UIImage? = nil) -> CPListItem {
@@ -311,6 +342,15 @@ final class CarPlayPresentationController {
 
     private enum Control {
         case previous, playPause, next
+    }
+
+    @available(iOS 26.4, *)
+    private func makeHeaderButtons(isPaused: Bool) -> [CPButton] {
+        [Control.previous, .playPause, .next].map { control in
+            CPButton(image: symbolImage(for: control, isPaused: isPaused)) { [weak self] _ in
+                self?.perform(control)
+            }
+        }
     }
 
     private func makeControlItems(isPaused: Bool) -> [CPListItem] {
