@@ -27,7 +27,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // this callback arrived — there's no ordering guarantee between the two scenes — and
         // Spotify's local transport is often still asleep this early in a drive. Reconnect
         // silently with a few bounded retries; never OAuth, never an automatic app switch.
-        services.spotifyManager.reconnectForCarPlay()
+        services.spotifyManager.reconnectForCarPlay(trigger: .carPlayDidConnect)
 
         let presentationController = CarPlayPresentationController(
             spotifyManager: services.spotifyManager,
@@ -48,7 +48,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     /// The driver came back to LyricDrive on the car screen — often right after starting music
     /// in Spotify's own CarPlay app, which wakes its transport. Try again (bounded, silent).
     func sceneDidBecomeActive(_ scene: UIScene) {
-        AppServices.shared.spotifyManager.reconnectForCarPlay()
+        AppServices.shared.spotifyManager.reconnectForCarPlay(trigger: .carPlaySceneDidBecomeActive)
     }
 
     func templateApplicationScene(

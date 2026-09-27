@@ -20,6 +20,7 @@ final class AppServices {
 
     let spotifyManager: SpotifyManager
     let lyricsManager: LyricsManager
+    let liveActivityManager: LiveActivityManager
 
     /// `true` while a CarPlay template scene is connected. Set only by `CarPlaySceneDelegate`;
     /// read by the phone scene's lifecycle handling so backgrounding the iPhone UI doesn't drop
@@ -31,6 +32,8 @@ final class AppServices {
         // SpotifyManager first, then LyricsManager built on top of that same instance.
         let spotifyManager = SpotifyManager()
         self.spotifyManager = spotifyManager
-        self.lyricsManager = LyricsManager(spotifyManager: spotifyManager)
+        let lyricsManager = LyricsManager(spotifyManager: spotifyManager)
+        self.lyricsManager = lyricsManager
+        self.liveActivityManager = LiveActivityManager(spotify: spotifyManager, lyrics: lyricsManager)
     }
 }
