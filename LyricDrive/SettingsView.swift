@@ -44,8 +44,10 @@ struct SettingsView: View {
             List {
                 musicServiceSection(session)
 
-                Section("Support") {
+                Section("Help") {
+                    // Help only: reopening the walkthrough never resets onboarding progress.
                     NavigationLink("How LyricDrive Works") { HowItWorksView() }
+                    NavigationLink("Widgets") { WidgetGuideView() }
                     NavigationLink("Driving Safely") { DrivingSafelyView() }
                     externalLink("Contact Support", url: Self.supportURL)
                     externalLink("Privacy Policy", url: Self.privacyPolicyURL)
@@ -267,28 +269,14 @@ struct SettingsView: View {
 
 // MARK: - Help pages
 
+/// The onboarding walkthrough in help mode; "Done" on the last page returns to Settings.
 private struct HowItWorksView: View {
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
-        List {
-            Section("On iPhone") {
-                Text("Play a song in Spotify or Apple Music. LyricDrive follows along automatically and shows synchronized lyrics, line by line, when they're available.")
-            }
-            Section("In CarPlay") {
-                Text("Use Now Playing for music controls and Lyrics for the synchronized lyric view. Once you're on Lyrics, it updates automatically as songs change.")
-                Text("CarPlay currently works with Spotify. Apple Music is supported on iPhone.")
-            }
-            Section("Staying connected") {
-                Text("LyricDrive reconnects to Spotify on its own when it can. If Spotify has been inactive for a while, LyricDrive may ask you to reconnect — Spotify opens for a moment, then brings you back.")
-                Text("With Apple Music, LyricDrive follows the Music app and catches up whenever you return to it.")
-            }
-            Section("Lyrics") {
-                Text("Some tracks don't have synchronized lyrics. When that happens, LyricDrive keeps showing the artwork and track while you listen.")
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .background(LDTheme.night)
-        .navigationTitle("How It Works")
-        .navigationBarTitleDisplayMode(.inline)
+        WalkthroughView(mode: .help) { dismiss() }
+            .navigationTitle("How LyricDrive Works")
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 

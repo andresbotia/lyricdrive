@@ -18,6 +18,9 @@ struct ContentView: View {
     @Environment(\.openURL) private var openURL
 
     @State private var isShowingSettings = false
+    @State private var isShowingWhatsNew = false
+    @AppStorage(OnboardingProgress.hasCompletedWalkthroughKey) private var hasCompletedWalkthrough = false
+    @AppStorage(OnboardingProgress.whatsNewVersionKey) private var whatsNewVersion = ""
 
     /// Apple Music only becomes active after access was granted once, so it always gets the home
     /// (which explains how to restore access if it's later revoked). Spotify keeps its original rule.
@@ -68,6 +71,19 @@ struct ContentView: View {
                 .environmentObject(appleMusicManager)
                 .environmentObject(nowPlaying)
         }
+        .sheet(isPresented: $isShowingWhatsNew) {
+            WhatsNewView()
+        }
+        .task(id: showsHome) { showWhatsNewIfNeeded() }
+    }
+
+    /// Once, on the home screen, for people updating from a version without the walkthrough.
+    /// Marked as seen when shown, so it never comes back — whichever button is used.
+    private func showWhatsNewIfNeeded() {
+        guard showsHome, !hasCompletedWalkthrough, !isShowingSettings,
+              whatsNewVersion != OnboardingProgress.whatsNewVersion else { return }
+        whatsNewVersion = OnboardingProgress.whatsNewVersion
+        isShowingWhatsNew = true
     }
 
     private func connect(_ service: MusicService) {

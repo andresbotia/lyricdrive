@@ -5,8 +5,8 @@
 
 import SwiftUI
 
-/// Shown until a music service has been authorized: Welcome (first launch only), then service
-/// selection. Returning users with a saved session never see this.
+/// Shown until a music service has been authorized: Welcome (first launch only), the short
+/// walkthrough (once), then service selection. Returning users with a saved session never see this.
 struct OnboardingView: View {
     let sessionForService: (MusicService) -> MusicSessionState
     let onConnect: (MusicService) -> Void
@@ -14,6 +14,11 @@ struct OnboardingView: View {
     let onShowSettings: () -> Void
 
     @AppStorage("onboarding.hasSeenWelcome") private var hasSeenWelcome = false
+    @AppStorage(OnboardingProgress.hasCompletedWalkthroughKey) private var hasCompletedWalkthrough = false
+    @AppStorage(OnboardingProgress.whatsNewVersionKey) private var whatsNewVersion = ""
+    /// Not persisted: the walkthrough only follows a Welcome tap, so anyone already past Welcome
+    /// (including people updating mid-setup) is never routed through it automatically.
+    @State private var isShowingWalkthrough = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -27,15 +32,38 @@ struct OnboardingView: View {
                     onShowSettings: onShowSettings
                 )
                 .transition(stepTransition(edge: .trailing))
+            } else if isShowingWalkthrough {
+                WalkthroughView(mode: .onboarding, onFinish: finishWalkthrough)
+                    .transition(stepTransition(edge: .trailing))
             } else {
-                WelcomeView(onGetStarted: { setWelcomeSeen(true) })
-                    .transition(stepTransition(edge: .leading))
+                WelcomeView(onGetStarted: {
+                    if hasCompletedWalkthrough {
+                        setWelcomeSeen(true)
+                    } else {
+                        withAnimation(stepAnimation) { isShowingWalkthrough = true }
+                    }
+                })
+                .transition(stepTransition(edge: .leading))
             }
         }
     }
 
+    /// Finished or skipped. Also covers this release's What's New, which describes the same things.
+    private func finishWalkthrough() {
+        hasCompletedWalkthrough = true
+        whatsNewVersion = OnboardingProgress.whatsNewVersion
+        withAnimation(stepAnimation) {
+            isShowingWalkthrough = false
+            hasSeenWelcome = true
+        }
+    }
+
+    private var stepAnimation: Animation {
+        reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.4)
+    }
+
     private func setWelcomeSeen(_ seen: Bool) {
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.4)) {
+        withAnimation(stepAnimation) {
             hasSeenWelcome = seen
         }
     }
