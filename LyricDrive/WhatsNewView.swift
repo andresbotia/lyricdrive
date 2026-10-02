@@ -17,9 +17,11 @@ enum OnboardingProgress {
 }
 
 /// One-time sheet for people updating from an earlier version, who never saw the walkthrough.
-/// "Explore LyricDrive" opens the walkthrough in place.
+/// "Explore LyricDrive" leads into the walkthrough in place; there's no way to dismiss it before
+/// that. `onComplete` runs only when the walkthrough's final "Done" is tapped, so closing the
+/// app partway through shows it again next time.
 struct WhatsNewView: View {
-    @Environment(\.dismiss) private var dismiss
+    let onComplete: () -> Void
     @State private var isExploring = false
 
     private struct Item: Identifiable {
@@ -38,13 +40,14 @@ struct WhatsNewView: View {
     var body: some View {
         Group {
             if isExploring {
-                WalkthroughView(mode: .help) { dismiss() }
+                WalkthroughView(mode: .help, onFinish: onComplete)
             } else {
                 summary
             }
         }
         .background(LDTheme.night.ignoresSafeArea())
         .preferredColorScheme(.dark)
+        .interactiveDismissDisabled()
     }
 
     private var summary: some View {
@@ -90,11 +93,6 @@ struct WhatsNewView: View {
                     .buttonStyle(PrimaryButtonStyle())
                     .accessibilityHint("Shows how LyricDrive works.")
 
-                    Button("Not Now") { dismiss() }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(LDTheme.textSecondary)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .padding(.top, 8)
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 40)

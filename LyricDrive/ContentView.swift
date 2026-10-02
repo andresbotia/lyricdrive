@@ -72,18 +72,24 @@ struct ContentView: View {
                 .environmentObject(nowPlaying)
         }
         .sheet(isPresented: $isShowingWhatsNew) {
-            WhatsNewView()
+            WhatsNewView(onComplete: completeWhatsNew)
         }
         .task(id: showsHome) { showWhatsNewIfNeeded() }
     }
 
-    /// Once, on the home screen, for people updating from a version without the walkthrough.
-    /// Marked as seen when shown, so it never comes back — whichever button is used.
+    /// On the home screen, for people updating from a version without the walkthrough, until
+    /// they finish it. Only educational: connection and service selection are untouched.
     private func showWhatsNewIfNeeded() {
         guard showsHome, !hasCompletedWalkthrough, !isShowingSettings,
               whatsNewVersion != OnboardingProgress.whatsNewVersion else { return }
-        whatsNewVersion = OnboardingProgress.whatsNewVersion
         isShowingWhatsNew = true
+    }
+
+    /// The walkthrough's final "Done": only now is this release's What's New recorded as seen.
+    private func completeWhatsNew() {
+        whatsNewVersion = OnboardingProgress.whatsNewVersion
+        hasCompletedWalkthrough = true
+        isShowingWhatsNew = false
     }
 
     private func connect(_ service: MusicService) {

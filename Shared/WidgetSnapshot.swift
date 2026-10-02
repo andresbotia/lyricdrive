@@ -85,11 +85,13 @@ nonisolated struct WidgetSnapshot: Codable, Equatable, Sendable {
 }
 
 extension WidgetSnapshot {
-    /// The previous, current, and next lyric lines.
+    /// Up to two lyric lines on each side of the current one.
     nonisolated struct LyricWindow: Equatable, Sendable {
+        var previous2: String?
         var previous: String?
         var current: String?
         var next: String?
+        var next2: String?
     }
 
     /// Estimated playback position, assuming playback continued uninterrupted since the snapshot.
@@ -110,14 +112,19 @@ extension WidgetSnapshot {
     nonisolated func lyricWindow(at date: Date) -> LyricWindow {
         guard lyricsStatus == .synced, !lines.isEmpty else { return LyricWindow() }
         let position = estimatedPositionMs(at: date)
+        func text(at index: Int) -> String? {
+            lines.indices.contains(index) ? Self.displayText(lines[index].text) : nil
+        }
         guard let index = lines.lastIndex(where: { $0.startMs <= position }) else {
-            // Before the first timestamp: nothing is current yet; the first line is next.
-            return LyricWindow(previous: nil, current: nil, next: Self.displayText(lines[0].text))
+            // Before the first timestamp: nothing is current yet; the first lines are next.
+            return LyricWindow(current: nil, next: text(at: 0), next2: text(at: 1))
         }
         return LyricWindow(
-            previous: index > 0 ? Self.displayText(lines[index - 1].text) : nil,
-            current: Self.displayText(lines[index].text),
-            next: index + 1 < lines.count ? Self.displayText(lines[index + 1].text) : nil
+            previous2: text(at: index - 2),
+            previous: text(at: index - 1),
+            current: text(at: index),
+            next: text(at: index + 1),
+            next2: text(at: index + 2)
         )
     }
 

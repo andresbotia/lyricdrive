@@ -5,22 +5,24 @@
 
 import SwiftUI
 
-/// The three iPhone widgets, and how to add them. Opened from the walkthrough and from
-/// Settings → Widgets. The previews are lightweight drawings in the widgets' style with demo
+/// The three widgets, and how to add them on iPhone and in CarPlay. Opened from the walkthrough
+/// and from Settings → Widgets. The previews are lightweight drawings in the widgets' style with demo
 /// content; they don't use the widget extension.
 struct WidgetGuideView: View {
     var body: some View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("LyricDrive widgets live on your iPhone's Home Screen and Lock Screen. They don't appear in CarPlay.")
+                    Text("LyricDrive widgets live on your iPhone's Home Screen and Lock Screen.")
+                        .foregroundStyle(LDTheme.textSecondary)
+                    Text("The Lyrics widget can also appear in CarPlay, giving you a glanceable view of the current lyrics without opening the full LyricDrive CarPlay app.")
                         .foregroundStyle(LDTheme.textSecondary)
                 }
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4))
             }
 
-            Section("iPhone widgets") {
+            Section("Widgets") {
                 guideRow(.lyrics) { LyricsWidgetPreview() }
                 guideRow(.glance) { LyricGlancePreview() }
                 guideRow(.nowPlaying) { NowPlayingWidgetPreview() }
@@ -41,8 +43,17 @@ struct WidgetGuideView: View {
                 step(3, "Choose LyricDrive, then Lyric Glance.")
             } header: {
                 Text("Add to your Lock Screen")
+            }
+
+            Section {
+                step(1, "While parked, open the widget settings for CarPlay — touch and hold the widgets on your CarPlay screen, or look under CarPlay in your iPhone's Settings.")
+                step(2, "Find LyricDrive.")
+                step(3, "Add the Lyrics widget to a widget stack.")
+                step(4, "Move it where you'd like it.")
+            } header: {
+                Text("Add to CarPlay")
             } footer: {
-                Text("Widgets show the song LyricDrive last followed. Open LyricDrive if a widget asks you to refresh it.")
+                Text("In CarPlay, the Lyrics widget shows just the lyrics, large and easy to read. Steps vary by car and iOS version. For artwork, playback controls and the full lyric view, open the LyricDrive app in CarPlay — its Now Playing and Lyrics tabs are always there.\n\nWidgets show the song LyricDrive last followed. Open LyricDrive if a widget asks you to refresh it.")
             }
         }
         .scrollContentBackground(.hidden)
@@ -67,7 +78,7 @@ struct WidgetGuideView: View {
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(kind.name) widget. \(kind.summary). Available on the \(kind.placement).")
+        .accessibilityLabel("\(kind.name) widget. \(kind.summary) Available on the \(kind.placement).")
     }
 
     private func step(_ number: Int, _ text: String) -> some View {
@@ -100,7 +111,7 @@ enum WidgetPreviewKind {
 
     var summary: String {
         switch self {
-        case .lyrics: "Follow the current lyric with nearby lines."
+        case .lyrics: "Follow the current lyric with nearby lines. Optimized for CarPlay."
         case .glance: "A compact lyric view for quick reading."
         case .nowPlaying: "Artwork, song information and playback controls."
         }
@@ -108,7 +119,8 @@ enum WidgetPreviewKind {
 
     var placement: String {
         switch self {
-        case .lyrics, .nowPlaying: "Home Screen"
+        case .lyrics: "Home Screen and in CarPlay"
+        case .nowPlaying: "Home Screen"
         case .glance: "Home Screen and Lock Screen"
         }
     }

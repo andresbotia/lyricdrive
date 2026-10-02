@@ -88,7 +88,10 @@ struct LyricsWidget: Widget {
         }
         .configurationDisplayName("Lyrics")
         .description("The current synced lyric, with the lines around it.")
-        .supportedFamilies([.systemMedium, .systemLarge])
+        // Small is the lyrics-only layout made for CarPlay (and StandBy). On the Home Screen the
+        // small spot belongs to Lyric Glance, so small Lyrics isn't offered there.
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        .disfavoredLocations([.homeScreen], for: [.systemSmall])
         .contentMarginsDisabled()
     }
 }
@@ -254,13 +257,43 @@ private struct MessageView: View {
 struct LyricsWidgetView: View {
     let entry: LyricDriveEntry
     @Environment(\.widgetFamily) private var family
+    /// `false` where the system removes widget backgrounds — CarPlay and StandBy. WidgetKit has
+    /// no public way to tell those two apart at render time (`WidgetLocation` is only used for
+    /// `disfavoredLocations`), so both get the glanceable layout.
+    @Environment(\.showsWidgetContainerBackground) private var showsBackground
+    @Environment(\.widgetContentMargins) private var contentMargins
 
     private var isLarge: Bool { family == .systemLarge }
 
+    /// Lyrics only, using the whole widget: the small size, and anywhere without a background.
+    private var isFocused: Bool { family == .systemSmall || !showsBackground }
+
     var body: some View {
-        content
-            .padding(isLarge ? 20 : 16)
-            .lyricDriveBackground(entry.snapshot)
+        if isFocused {
+            FocusedLyricsView(content: focusedContent)
+                .padding(contentMargins)
+                // Plain, high-contrast surface where a background is shown; no artwork tint.
+                .containerBackground(for: .widget) { WidgetStyle.night }
+        } else {
+            content
+                .padding(isLarge ? 20 : 16)
+                .lyricDriveBackground(entry.snapshot)
+        }
+    }
+
+    private var focusedContent: FocusedLyricsView.Content {
+        guard let snapshot = entry.snapshot else { return .message("Open LyricDrive to get started") }
+        switch snapshot.status {
+        case .track:
+            if entry.isStale { return .message("Open LyricDrive to refresh") }
+            if let status = WidgetMessage.forLyrics(snapshot) { return .message(status) }
+            return .lyrics(entry.lyricWindow)
+        case .noTrack: return .message("No song playing")
+        case .connecting: return .message("Connecting to \(snapshot.providerName)…")
+        case .needsSetup: return .message("Open LyricDrive to connect")
+        case .disconnected: return .message("Open LyricDrive to reconnect \(snapshot.providerName)")
+        case .accessDenied: return .message("Apple Music access is off")
+        }
     }
 
     @ViewBuilder
@@ -513,13 +546,59 @@ extension WidgetSnapshot {
                 Line(startMs: 0, text: "Headlights cutting through the rain"),
                 Line(startMs: 8_000, text: "Every exit looks the same"),
                 Line(startMs: 16_000, text: "Radio low, the city's asleep"),
+                Line(startMs: 24_000, text: "Promises I meant to keep"),
+                Line(startMs: 32_000, text: "Mile markers counting down"),
             ],
-            positionMs: 9_000,
+            positionMs: 17_000,
             positionDate: Date(),
             durationMs: 210_000,
             isLive: true,
             controlsAvailable: true,
             writtenAt: Date()
         )
+    }
+}
+
+// MARK: - Previews
+
+#Preview("Lyrics · small", as: .systemSmall) {
+    LyricsWidget()
+} timeline: {
+    LyricDriveEntry(date: .now, snapshot: .preview, isStale: false)
+    LyricDriveEntry(date: .now, snapshot: .previewLongLines, isStale: false)
+    LyricDriveEntry(date: .now, snapshot: nil, isStale: false)
+}
+
+#Preview("Lyrics · medium", as: .systemMedium) {
+    LyricsWidget()
+} timeline: {
+    LyricDriveEntry(date: .now, snapshot: .preview, isStale: false)
+}
+
+#Preview("Lyrics · large", as: .systemLarge) {
+    LyricsWidget()
+} timeline: {
+    LyricDriveEntry(date: .now, snapshot: .preview, isStale: false)
+}
+
+#Preview("Lyric Glance · small", as: .systemSmall) {
+    CompactLyricsWidget()
+} timeline: {
+    LyricDriveEntry(date: .now, snapshot: .preview, isStale: false)
+}
+
+extension WidgetSnapshot {
+    /// Preview only: long wrapping lines, to exercise the focused layout's fallbacks.
+    static var previewLongLines: WidgetSnapshot {
+        var snapshot = preview
+        snapshot.lines = [
+            Line(startMs: 0, text: "Headlights cutting through the rain on an empty road"),
+            Line(startMs: 4_000, text: "Every exit looks the same when you're this far from home tonight"),
+            Line(startMs: 8_000, text: "Radio low, the city's asleep and the stars are burning out one by one"),
+            Line(startMs: 12_000, text: "Promises I meant to keep are folded in the glovebox"),
+            Line(startMs: 16_000, text: "Mile markers counting down"),
+        ]
+        snapshot.positionMs = 9_000
+        return snapshot
     }
 }
