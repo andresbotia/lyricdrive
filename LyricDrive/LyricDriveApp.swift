@@ -44,12 +44,13 @@ struct LyricDriveApp: App {
                 }
                 nowPlaying.appDidBecomeActive()
             case .inactive, .background:
-                nowPlaying.appWillResignActive()
-                // While CarPlay is connected it still needs App Remote, so the phone scene
-                // leaving the foreground must not disconnect it. CarPlaySceneDelegate applies
-                // this same disconnect later if CarPlay goes away while the phone is backgrounded.
+                // While CarPlay is connected it still needs App Remote (Spotify) and the playback
+                // clock (Apple Music), so the phone scene leaving the foreground must not stop
+                // them. CarPlaySceneDelegate applies the same later if CarPlay goes away while
+                // the phone is backgrounded.
                 if !AppServices.shared.isCarPlayConnected {
                     spotifyManager.appWillResignActive()
+                    nowPlaying.appWillResignActive()
                 }
             @unknown default:
                 break

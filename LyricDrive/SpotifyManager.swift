@@ -100,6 +100,15 @@ final class SpotifyManager: NSObject, ObservableObject {
     /// still pending, so the UI keeps showing "Reconnecting" between attempts.
     var hasPendingReconnect: Bool { renewalInFlight || autoReconnectTask != nil }
 
+    /// Emits when `hasPendingReconnect` may have changed, for observers outside SwiftUI (CarPlay).
+    var hasPendingReconnectPublisher: AnyPublisher<Bool, Never> {
+        $autoReconnectTask.map { $0 != nil }
+            .combineLatest($renewalInFlight)
+            .map { $0 || $1 }
+            .removeDuplicates()
+            .eraseToAnyPublisher()
+    }
+
     enum ReconnectTrigger: String {
         case sessionRestore, carPlayDidConnect, carPlaySceneDidBecomeActive
         case phoneSceneDidBecomeActive, manualReconnect

@@ -172,6 +172,12 @@ final class NowPlayingStore: ObservableObject {
         }
     }
 
+    /// The CarPlay screen connected or came back: Apple Music resyncs with the Music app.
+    /// Spotify's CarPlay reconnect stays in `CarPlaySceneDelegate`.
+    func carPlayDidBecomeActive() {
+        if activeService == .appleMusic { appleMusic.appDidBecomeActive() }
+    }
+
     func appWillResignActive() {
         if activeService == .appleMusic { appleMusic.appWillResignActive() }
     }

@@ -32,24 +32,26 @@ There is no documented supported route in these APIs for LyricDrive to reliably 
 
 The structural failure is assuming that dictionary assignment makes LyricDrive the active Now Playing provider. That explains why correctly typed local metadata does not establish a populated system screen. We have no real-car process logs or active-owner trace here, so the precise runtime dictionary contents and ownership arbitration at the reported failure are **not measured**. Do not describe this as a confirmed runtime trace or a verified real-car fix.
 
-## Final implementation
+## Apple Music and CPNowPlayingTemplate
 
-Use the requested LyricDrive-owned fallback consistently across supported iOS versions. Both tab roots remain CPListTemplate. Now Playing is the initial first tab and directly displays metadata and controls; selecting it later shows the same list without tapping a launcher or pushing a screen. There is no extra Back step or duplicate-template risk. Track and pause changes update contents without changing tabs.
+October 2, 2026. Re-inspected `CPNowPlayingTemplate.h` (iPhoneOS27.0 SDK). `sharedTemplate` is "the shared now playing template for your app"; it exposes buttons, Up Next, album/artist button, and (iOS 27) `allowsMiniPlayer`, but no title, artist, artwork, or playback-state setters. Its content comes from the app's own now-playing state.
 
-Title, artist, and nonempty album get separate display-only rows. Long values reuse the existing whitespace/punctuation split across text and detailText, preserving the strings rather than shortening them. Artwork appears on the title row, with a local placeholder until Spotify supplies the current track image. SpotifyManager already clears artwork on track changes and guards image callbacks by track URI. Disconnect removes metadata and controls; reconnect restores current state. Host width may still truncate unusually long fields; inspect this in the car.
+Apple Music playback in LyricDrive goes through `MPMusicPlayerController.systemMusicPlayer`, whose playback belongs to the Music app, not LyricDrive. Nothing in the headers documents that LyricDrive's shared template reflects another app's session, and making it do so would mean publishing LyricDrive-owned `MPNowPlayingInfoCenter` metadata, which is the impersonation this design avoids. CarPlay's own Now Playing button already opens Music's real Now Playing screen. So LyricDrive does not use `CPNowPlayingTemplate` for either service.
 
-Previous, Play/Pause, and Next are separate native list controls. Each tap calls one existing SpotifyManager method once and completes the selection. Play/Pause reads Spotify's current paused state in SpotifyManager. Commands are ignored if disconnected or without a track. No MediaPlayer metadata publication or MPRemoteCommandCenter registration remains in LyricDrive; Spotify keeps its own system controls. CPNowPlayingTemplate and CPListTemplateDetailsHeader are no longer used as LyricDrive destinations.
+## Current implementation
 
-Lyrics state translation, five-row context window, long-line splitting, current indicator, loading/no-lyrics/error presentation, and rendering match HEAD exactly. The persistent tab array is unchanged. Authentication, reconnect behavior, providers, phone UI, signing, and capabilities were not edited.
+Both tab roots remain `CPListTemplate` in a `CPTabBarTemplate` that is created once per connection and never rebuilt, so the selected tab survives track changes, metadata enrichment, and service switches.
 
-## Validation
+**Data source.** CarPlay reads the normalized active-service state from `NowPlayingStore` (track, artwork, paused state, active service) and lyrics from `LyricsManager`, the same objects the iPhone UI uses. Provider-specific connection/access state is converted in one place (`makeAvailability()`), derived from the shared `MusicSessionState`; for Spotify that keeps "reconnecting" up while a renewal, automatic reconnect, or scheduled retry is pending. Controls go through `NowPlayingStore`, which routes them to the active service only.
 
-- Requested generic iOS build: passed.
-- Generic iOS Simulator Debug build: passed.
-- Generic iOS Release build: passed.
-- `git diff --check`: passed.
-- Source comparison: lyric translation/splitting/rendering match HEAD exactly; no navigation pushes, tab replacement/selection, details header, MediaPlayer writes/registrations, or playback-clock subscriptions remain in the presenter.
+**Now Playing (iOS 26.4+).** `CPListTemplateDetailsHeader`: artwork thumbnail (local placeholder until the song's artwork arrives), title, artist, and Previous / Play-Pause / Next buttons, with no list rows, so the controls are always visible. Control symbols are rendered at the header's `maximumActionButtonSize`, and `wantsAdaptiveBackgroundStyle` tints the header from the artwork. The header is updated in place, touching only the fields that changed.
 
-Build logs: `/tmp/lyricdrive-carplay-generic.log`, `/tmp/lyricdrive-carplay-simulator.log`, `/tmp/lyricdrive-carplay-release.log`. Warnings concern AppIntents metadata extraction (no AppIntents.framework dependency) and Spotify SDK umbrella headers missing connectivity headers; all three builds succeed.
+**Now Playing (older iOS).** One row with artwork, title, and artist, then the three control rows.
 
-Still required in another TestFlight/car test: initial display and switching tabs; long title/artist readability; artwork replacement and rapid track changes; each transport control and pause label; disconnect/reconnect states; staying on Lyrics during track changes; Spotify retaining system playback controls. No real-car success is claimed.
+**Status states.** Connecting/reconnecting, needs action, Apple Music access off/restricted/needed, and no song use the template's empty view (with a spinner for in-progress states). No controls are shown.
+
+**Lyrics.** Unchanged presentation: up to five rows, current line marked with the playing indicator, long lines split across text/detail, ♪ for instrumental breaks, loading/no-synced/error rows. Status rows follow the same availability.
+
+**Updates.** Only semantic publishers are observed (never the playback clock), changes are coalesced to the next main-queue turn, and each tab is touched only if its derived state changed.
+
+No `MPNowPlayingInfoCenter` writes, `MPRemoteCommandCenter` registrations, audio session, or background modes. No real-car result is claimed.

@@ -27,14 +27,18 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // this callback arrived — there's no ordering guarantee between the two scenes — and
         // Spotify's local transport is often still asleep this early in a drive. Reconnect
         // silently with a few bounded retries; never OAuth, never an automatic app switch.
-        // CarPlay is Spotify-only for now: while Apple Music is active, Spotify's saved session
-        // stays dormant and CarPlay shows its existing not-connected state.
+        // While Apple Music is active, Spotify's saved session stays dormant.
         if services.nowPlaying.activeService == .spotify {
             services.spotifyManager.reconnectForCarPlay(trigger: .carPlayDidConnect)
         }
+        // Apple Music: resync with the Music app, which may have changed songs while LyricDrive
+        // was suspended.
+        services.nowPlaying.carPlayDidBecomeActive()
 
         let presentationController = CarPlayPresentationController(
             spotifyManager: services.spotifyManager,
+            appleMusicManager: services.appleMusicManager,
+            nowPlaying: services.nowPlaying,
             lyricsManager: services.lyricsManager
         )
         self.presentationController = presentationController
@@ -50,11 +54,16 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     }
 
     /// The driver came back to LyricDrive on the car screen — often right after starting music
-    /// in Spotify's own CarPlay app, which wakes its transport. Try again (bounded, silent).
+    /// in Spotify's or Apple Music's own CarPlay app. Spotify: try again (bounded, silent), since
+    /// that usually wakes its transport. Apple Music: resync with the Music app.
     func sceneDidBecomeActive(_ scene: UIScene) {
         let services = AppServices.shared
-        guard services.nowPlaying.activeService == .spotify else { return }
-        services.spotifyManager.reconnectForCarPlay(trigger: .carPlaySceneDidBecomeActive)
+        switch services.nowPlaying.activeService {
+        case .spotify:
+            services.spotifyManager.reconnectForCarPlay(trigger: .carPlaySceneDidBecomeActive)
+        case .appleMusic:
+            services.nowPlaying.carPlayDidBecomeActive()
+        }
     }
 
     func templateApplicationScene(
@@ -75,6 +84,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // resign-active disconnect that was skipped while CarPlay was connected.
         if !isPhoneSceneForegroundActive {
             services.spotifyManager.appWillResignActive()
+            services.nowPlaying.appWillResignActive()
         }
     }
 
