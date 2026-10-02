@@ -599,7 +599,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 11;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = LyricDriveLiveActivity/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "LyricDrive Lyrics";
@@ -625,7 +625,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 11;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = LyricDriveLiveActivity/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "LyricDrive Lyrics";

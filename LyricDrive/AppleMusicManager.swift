@@ -16,7 +16,8 @@ import os
 /// player: its now-playing item (full `MPMediaItem` metadata, library and streamed catalog
 /// tracks alike), playback state, playback time, change notifications, and transport controls.
 /// LyricDrive never sets a queue or starts its own playback — `ApplicationMusicPlayer` is not
-/// used. MusicKit provides authorization, subscription status, and a catalog artwork fallback.
+/// used. MusicKit provides authorization, account status, and a catalog fallback for artwork and
+/// metadata that streamed items leave empty.
 ///
 /// Playback position uses the same model as `SpotifyManager`: an authoritative anchor (the
 /// player's reported time plus a monotonic timestamp) interpolated by a ~10Hz local clock while
@@ -59,7 +60,10 @@ final class AppleMusicManager: ObservableObject {
     private var ticksSinceDriftCheck = 0
     private var anchorPositionMs = 0
     private var anchorUptime = ProcessInfo.processInfo.systemUptime
-    private var artworkTask: Task<Void, Never>?
+    private var catalogTask: Task<Void, Never>?
+    /// Catalog values for fields the current item left empty. Kept per track so later player
+    /// notifications (which rebuild the track from the item) don't drop them again.
+    private var catalogMetadata: CatalogMetadata?
     private var subscriptionTask: Task<Void, Never>?
 
     /// Re-anchor when the player's reported time differs from the interpolated one by more.
@@ -155,8 +159,9 @@ final class AppleMusicManager: ObservableObject {
     }
 
     private func clearPlayback() {
-        artworkTask?.cancel()
-        artworkTask = nil
+        catalogTask?.cancel()
+        catalogTask = nil
+        catalogMetadata = nil
         stopClock()
         track = nil
         artwork = nil
@@ -186,13 +191,13 @@ final class AppleMusicManager: ObservableObject {
         guard isObserving else { return }
 
         let item = player.nowPlayingItem
-        let newTrack = item.map(Self.makeTrack(from:))
+        let newTrack = item.map { catalogMetadata?.filling(Self.makeTrack(from: $0)) ?? Self.makeTrack(from: $0) }
         if newTrack != track {
             let trackChanged = newTrack?.id != track?.id
             track = newTrack
             if trackChanged {
                 log("current item: \(newTrack.map { "\($0.title) — \($0.artist) [\($0.id)]" } ?? "none")")
-                loadArtwork(for: item, trackID: newTrack?.id)
+                loadDetails(for: item, track: newTrack)
             }
         }
 
@@ -239,43 +244,101 @@ final class AppleMusicManager: ObservableObject {
         )
     }
 
-    // MARK: - Artwork
+    // MARK: - Artwork and catalog details
 
-    /// Loaded once per track change, never on clock ticks. Uses the item's own artwork, falling
-    /// back to the catalog artwork for streamed tracks that don't carry any.
-    private func loadArtwork(for item: MPMediaItem?, trackID: String?) {
-        artworkTask?.cancel()
-        artworkTask = nil
+    /// Fields a streamed item may be missing, filled from the Apple Music catalog. Only fills
+    /// gaps — never overrides what the Music app reported — and only for the track it was
+    /// fetched for.
+    private struct CatalogMetadata {
+        let trackID: String
+        let title: String
+        let artist: String
+        let album: String
+        let durationMs: Int
+
+        func filling(_ track: NowPlayingTrack) -> NowPlayingTrack {
+            guard track.id == trackID else { return track }
+            return NowPlayingTrack(
+                provider: track.provider,
+                id: track.id,
+                title: track.title.isEmpty ? title : track.title,
+                artist: track.artist.isEmpty ? artist : track.artist,
+                album: track.album.isEmpty ? album : track.album,
+                durationMs: track.durationMs > 0 ? track.durationMs : durationMs
+            )
+        }
+    }
+
+    private static func isIncomplete(_ track: NowPlayingTrack) -> Bool {
+        track.title.isEmpty || track.artist.isEmpty || track.album.isEmpty || track.durationMs <= 0
+    }
+
+    /// Runs once per track change, never on clock ticks. Uses the item's own artwork; for
+    /// streamed tracks missing artwork or metadata, one catalog lookup fills the gaps. Filled
+    /// metadata republishes `track` (same `id`), which lets `LyricsManager` look up lyrics again
+    /// once if the lookup fields changed.
+    private func loadDetails(for item: MPMediaItem?, track: NowPlayingTrack?) {
+        catalogTask?.cancel()
+        catalogTask = nil
+        catalogMetadata = nil
         artwork = nil
-        guard let item, let trackID else { return }
+        guard let item, let track else { return }
 
         if let image = item.artwork?.image(at: Self.artworkSize) {
             artwork = image
-            return
         }
+        let needsArtwork = artwork == nil
+        let needsMetadata = Self.isIncomplete(track)
+        guard needsArtwork || needsMetadata else { return }
 
         let storeID = item.playbackStoreID
         guard !storeID.isEmpty, storeID != "0" else {
-            log("no artwork available")
+            log("no catalog ID: artworkMissing=\(needsArtwork) metadataIncomplete=\(needsMetadata)")
             return
         }
 
-        artworkTask = Task { [weak self] in
+        let trackID = track.id
+        catalogTask = Task { [weak self] in
             do {
                 var request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(storeID))
                 request.limit = 1
                 let response = try await request.response()
-                guard let url = response.items.first?.artwork?.url(width: Int(Self.artworkSize.width), height: Int(Self.artworkSize.height)),
-                      url.scheme == "https" || url.scheme == "http" else {
-                    self?.log("catalog artwork unavailable")
+                guard !Task.isCancelled, let self, self.track?.id == trackID, let song = response.items.first else {
+                    self?.log("catalog details unavailable")
                     return
                 }
+
+                if needsMetadata {
+                    self.applyCatalogMetadata(from: song, trackID: trackID)
+                }
+
+                guard needsArtwork,
+                      let url = song.artwork?.url(width: Int(Self.artworkSize.width), height: Int(Self.artworkSize.height)),
+                      url.scheme == "https" || url.scheme == "http" else { return }
                 let (data, _) = try await URLSession.shared.data(from: url)
-                guard !Task.isCancelled, let self, self.track?.id == trackID, let image = UIImage(data: data) else { return }
+                guard !Task.isCancelled, self.track?.id == trackID, let image = UIImage(data: data) else { return }
                 self.artwork = image
             } catch {
-                self?.log("catalog artwork lookup failed: \(error.localizedDescription)")
+                self?.log("catalog lookup failed: \(error.localizedDescription)")
             }
+        }
+    }
+
+    private func applyCatalogMetadata(from song: Song, trackID: String) {
+        guard let current = track, current.id == trackID else { return }
+        let duration = song.duration ?? 0
+        let metadata = CatalogMetadata(
+            trackID: trackID,
+            title: song.title,
+            artist: song.artistName,
+            album: song.albumTitle ?? "",
+            durationMs: duration.isFinite && duration > 0 ? Int((duration * 1000).rounded()) : 0
+        )
+        catalogMetadata = metadata
+        let enriched = metadata.filling(current)
+        if enriched != current {
+            log("catalog metadata filled: \(enriched.title) — \(enriched.artist) [\(trackID)]")
+            track = enriched
         }
     }
 

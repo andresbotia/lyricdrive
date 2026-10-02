@@ -41,12 +41,15 @@ final class NowPlayingStore: ObservableObject {
 
     private static let activeServiceKey = "musicService.active"
 
+    /// The persisted active service. Existing installs have no stored value and keep Spotify.
+    nonisolated static var storedActiveService: MusicService {
+        UserDefaults.standard.string(forKey: activeServiceKey).flatMap(MusicService.init(rawValue:)) ?? .spotify
+    }
+
     init(spotify: SpotifyManager, appleMusic: AppleMusicManager) {
         self.spotify = spotify
         self.appleMusic = appleMusic
-        // Existing installs have no stored value and keep using Spotify.
-        let stored = UserDefaults.standard.string(forKey: Self.activeServiceKey).flatMap(MusicService.init(rawValue:))
-        activeService = stored ?? .spotify
+        activeService = Self.storedActiveService
         bind(to: activeService, replayCurrentState: true)
         if activeService == .appleMusic {
             appleMusic.start()
@@ -69,27 +72,34 @@ final class NowPlayingStore: ObservableObject {
         return status
     }
 
-    /// Makes Spotify the active service and starts its existing connect flow.
+    /// Makes Spotify the active service and starts its existing connect flow: with a saved
+    /// session that's a silent connect (or renewal); otherwise Spotify authorization.
     func activateSpotify() {
         switchTo(.spotify)
         spotify.connect()
     }
 
-    /// Stops following Apple Music and returns to service selection. iOS's Music permission
-    /// itself can only be changed in the Settings app.
+    /// Stops following Apple Music. With a saved Spotify session this returns to Spotify;
+    /// otherwise to service selection. iOS's Music permission itself can only be changed in the
+    /// Settings app.
     func stopUsingAppleMusic() {
-        switchTo(.spotify)
+        if spotify.hasAuthorizedSession {
+            activateSpotify()
+        } else {
+            switchTo(.spotify)
+        }
     }
 
     private func switchTo(_ service: MusicService) {
         guard service != activeService else { return }
 
-        // Fully release the previous provider so its state can't leak into the UI, the lyrics
+        // Release the previous provider so its state can't leak into the UI, the lyrics
         // pipeline, CarPlay, or the Live Activity (the latter two are Spotify-only and gated on
-        // Spotify's session).
+        // Spotify's connection). Switching only disconnects Spotify; its saved session is kept
+        // for switching back. Forgetting it is the separate "Disconnect Spotify" action.
         switch activeService {
         case .spotify:
-            spotify.disconnectAndForgetSpotify()
+            spotify.disconnect()
         case .appleMusic:
             appleMusic.stop()
         }
@@ -104,7 +114,7 @@ final class NowPlayingStore: ObservableObject {
     }
 
     /// - Parameter replayCurrentState: `false` when switching providers. Spotify keeps its
-    ///   last-known track fields after `disconnectAndForgetSpotify()`, so after a switch only
+    ///   last-known track fields after disconnecting, so after a switch only
     ///   fresh updates are forwarded — never a song from before the switch.
     private func bind(to service: MusicService, replayCurrentState: Bool) {
         bindings.removeAll()

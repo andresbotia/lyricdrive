@@ -95,7 +95,9 @@ struct SettingsView: View {
                     dismiss()
                 }
             } message: {
-                Text("LyricDrive will stop following the Music app and return to service selection.")
+                Text(spotifyManager.hasAuthorizedSession
+                     ? "LyricDrive will stop following the Music app and reconnect to Spotify."
+                     : "LyricDrive will stop following the Music app and return to service selection.")
             }
             .confirmationDialog(
                 pendingSwitch.map { "Switch to \($0.displayName)?" } ?? "",
@@ -238,10 +240,12 @@ struct SettingsView: View {
     private func switchMessage(for service: MusicService) -> String {
         switch service {
         case .spotify:
-            "LyricDrive will stop following Apple Music. Spotify will open briefly to confirm."
+            spotifyManager.hasAuthorizedSession
+                ? "LyricDrive will stop following Apple Music and reconnect to Spotify."
+                : "LyricDrive will stop following Apple Music. Spotify will open briefly to confirm."
         case .appleMusic:
             spotifyManager.hasAuthorizedSession
-                ? "LyricDrive will stop following Spotify and disconnect it on this iPhone. You can switch back anytime."
+                ? "LyricDrive will follow the Music app instead of Spotify. Spotify stays signed in, so you can switch back anytime."
                 : "LyricDrive will follow what's playing in the Music app."
         }
     }

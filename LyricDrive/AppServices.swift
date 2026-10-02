@@ -33,7 +33,8 @@ final class AppServices {
     private init() {
         // Preserves the original initialization order from LyricDriveApp.init():
         // SpotifyManager first, then LyricsManager built on top of the active provider's state.
-        let spotifyManager = SpotifyManager()
+        // A saved Spotify session stays saved while Apple Music is active, but must not connect.
+        let spotifyManager = SpotifyManager(connectsOnLaunch: NowPlayingStore.storedActiveService == .spotify)
         self.spotifyManager = spotifyManager
         let appleMusicManager = AppleMusicManager()
         self.appleMusicManager = appleMusicManager
@@ -41,6 +42,6 @@ final class AppServices {
         self.nowPlaying = nowPlaying
         let lyricsManager = LyricsManager(nowPlaying: nowPlaying)
         self.lyricsManager = lyricsManager
-        self.liveActivityManager = LiveActivityManager(spotify: spotifyManager, lyrics: lyricsManager)
+        self.liveActivityManager = LiveActivityManager(spotify: spotifyManager, lyrics: lyricsManager, nowPlaying: nowPlaying)
     }
 }

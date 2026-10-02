@@ -38,7 +38,10 @@ struct LyricDriveApp: App {
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
-                spotifyManager.appDidBecomeActive()
+                // Spotify's saved session stays dormant while Apple Music is active.
+                if nowPlaying.activeService == .spotify {
+                    spotifyManager.appDidBecomeActive()
+                }
                 nowPlaying.appDidBecomeActive()
             case .inactive, .background:
                 nowPlaying.appWillResignActive()

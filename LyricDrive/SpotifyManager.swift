@@ -172,7 +172,9 @@ final class SpotifyManager: NSObject, ObservableObject {
         return appRemote
     }()
 
-    override init() {
+    /// - Parameter connectsOnLaunch: `false` while another music service is active. The saved
+    ///   session is still restored, but nothing connects or renews until `connect()` is called.
+    init(connectsOnLaunch: Bool = true) {
         super.init()
         #if DEBUG && targetEnvironment(simulator)
         if CarPlayDemo.isEnabled {
@@ -180,13 +182,13 @@ final class SpotifyManager: NSObject, ObservableObject {
             return
         }
         #endif
-        restoreSessionFromKeychain()
+        restoreSessionFromKeychain(connecting: connectsOnLaunch)
     }
 
     /// Loads any previously-authorized session from the Keychain and, if present, wires it up
     /// without ever showing Spotify's interactive authorization screen: a valid session connects
     /// immediately, an expired one triggers a silent renewal.
-    private func restoreSessionFromKeychain() {
+    private func restoreSessionFromKeychain(connecting: Bool) {
         guard let restoredSession = sessionStore.loadSession() else {
             print("SpotifyManager: No stored Spotify session")
             return
@@ -197,6 +199,11 @@ final class SpotifyManager: NSObject, ObservableObject {
         sessionManager.session = restoredSession
         accessToken = restoredSession.accessToken
         appRemote.connectionParameters.accessToken = restoredSession.accessToken
+
+        guard connecting else {
+            print("SpotifyManager: Not connecting — another music service is active")
+            return
+        }
 
         if restoredSession.isExpired {
             print("SpotifyManager: Spotify session renewal requested")

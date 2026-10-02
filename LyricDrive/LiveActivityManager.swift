@@ -12,6 +12,7 @@ enum InternalFeatures {
 final class LiveActivityManager {
     private let spotify: SpotifyManager
     private let lyrics: LyricsManager
+    private let nowPlaying: NowPlayingStore
     private var activity: Activity<LyricDriveActivityAttributes>?
     private var lastContent: LyricDriveActivityAttributes.ContentState?
     private var observers = Set<AnyCancellable>()
@@ -20,9 +21,10 @@ final class LiveActivityManager {
     private var needsReconcile = false
     private var suppressStartsUntilForeground = false
 
-    init(spotify: SpotifyManager, lyrics: LyricsManager) {
+    init(spotify: SpotifyManager, lyrics: LyricsManager, nowPlaying: NowPlayingStore) {
         self.spotify = spotify
         self.lyrics = lyrics
+        self.nowPlaying = nowPlaying
         guard InternalFeatures.carPlayLiveActivityEnabled else {
             Task { for activity in Activity<LyricDriveActivityAttributes>.activities {
                 await activity.end(nil, dismissalPolicy: .immediate)
@@ -31,6 +33,7 @@ final class LiveActivityManager {
         }
         // Published values emit in willSet. Defer reading until all related state is applied.
         let changes = Publishers.MergeMany([
+            nowPlaying.$activeService.map { _ in () }.eraseToAnyPublisher(),
             spotify.$isConnected.map { _ in () }.eraseToAnyPublisher(),
             spotify.$trackURI.map { _ in () }.eraseToAnyPublisher(),
             spotify.$trackName.map { _ in () }.eraseToAnyPublisher(),
@@ -61,7 +64,8 @@ final class LiveActivityManager {
     }
 
     private func reconcile() async {
-        guard spotify.hasAuthorizedSession || spotify.isConnected else {
+        // Spotify-only prototype: a Spotify session kept while Apple Music is active doesn't count.
+        guard nowPlaying.activeService == .spotify, spotify.hasAuthorizedSession || spotify.isConnected else {
             await endAll()
             return
         }

@@ -27,7 +27,11 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // this callback arrived — there's no ordering guarantee between the two scenes — and
         // Spotify's local transport is often still asleep this early in a drive. Reconnect
         // silently with a few bounded retries; never OAuth, never an automatic app switch.
-        services.spotifyManager.reconnectForCarPlay(trigger: .carPlayDidConnect)
+        // CarPlay is Spotify-only for now: while Apple Music is active, Spotify's saved session
+        // stays dormant and CarPlay shows its existing not-connected state.
+        if services.nowPlaying.activeService == .spotify {
+            services.spotifyManager.reconnectForCarPlay(trigger: .carPlayDidConnect)
+        }
 
         let presentationController = CarPlayPresentationController(
             spotifyManager: services.spotifyManager,
@@ -48,7 +52,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     /// The driver came back to LyricDrive on the car screen — often right after starting music
     /// in Spotify's own CarPlay app, which wakes its transport. Try again (bounded, silent).
     func sceneDidBecomeActive(_ scene: UIScene) {
-        AppServices.shared.spotifyManager.reconnectForCarPlay(trigger: .carPlaySceneDidBecomeActive)
+        let services = AppServices.shared
+        guard services.nowPlaying.activeService == .spotify else { return }
+        services.spotifyManager.reconnectForCarPlay(trigger: .carPlaySceneDidBecomeActive)
     }
 
     func templateApplicationScene(

@@ -50,13 +50,19 @@ final class LyricsManager: ObservableObject {
     private let lyricsService: LyricsService
     private var cancellables = Set<AnyCancellable>()
     private var currentTrackURI: String?
+    /// The metadata the current track's latest lookup used.
+    private var currentLookup: LyricsLookupKey?
+    /// Set once the current track has had its one metadata-driven refresh.
+    private var didRefreshCurrentTrack = false
     private var fetchTask: Task<Void, Never>?
 
     init(nowPlaying: NowPlayingStore, lyricsService: LyricsService = LyricsService()) {
         self.lyricsService = lyricsService
 
+        // Not deduplicated by `id` alone: a same-track update whose lookup fields changed (late
+        // Apple Music metadata) may warrant one refreshed lookup — see `handleTrackChange`.
         nowPlaying.$track
-            .removeDuplicates { $0?.id == $1?.id }
+            .removeDuplicates()
             .sink { [weak self, weak nowPlaying] track in
                 guard let self, let nowPlaying else { return }
                 self.handleTrackChange(track: track, nowPlaying: nowPlaying)
@@ -72,8 +78,13 @@ final class LyricsManager: ObservableObject {
 
     private func handleTrackChange(track: NowPlayingTrack?, nowPlaying: NowPlayingStore) {
         let trackURI = track?.id ?? ""
-        guard trackURI != currentTrackURI else { return }
+        guard trackURI != currentTrackURI else {
+            refreshLookupIfMetadataChanged(track: track, nowPlaying: nowPlaying)
+            return
+        }
         currentTrackURI = trackURI
+        currentLookup = nil
+        didRefreshCurrentTrack = false
 
         // Any in-flight lookup belonged to whatever track we were just on — abandon it.
         fetchTask?.cancel()
@@ -85,6 +96,30 @@ final class LyricsManager: ObservableObject {
             state = .idle
             return
         }
+
+        startLookup(for: track, nowPlaying: nowPlaying)
+    }
+
+    /// Same track, new metadata — e.g. a streamed Apple Music item whose title, artist, album, or
+    /// duration only became known after the first lookup started. Looks up lyrics again at most
+    /// once per track, and only when a field the lookup uses changed materially (never for
+    /// artwork, playback state, or position updates, which don't reach here as track changes).
+    private func refreshLookupIfMetadataChanged(track: NowPlayingTrack?, nowPlaying: NowPlayingStore) {
+        guard let track, !track.id.isEmpty, track.id == currentTrackURI,
+              !didRefreshCurrentTrack,
+              let currentLookup, currentLookup.differsMaterially(from: LyricsLookupKey(track)) else { return }
+        didRefreshCurrentTrack = true
+
+        fetchTask?.cancel()
+        lines = []
+        plainLyrics = nil
+        currentLineIndex = nil
+        startLookup(for: track, nowPlaying: nowPlaying)
+    }
+
+    private func startLookup(for track: NowPlayingTrack, nowPlaying: NowPlayingStore) {
+        let trackURI = track.id
+        currentLookup = LyricsLookupKey(track)
 
         let trackName = track.title
         let artistName = track.artist
@@ -129,5 +164,34 @@ final class LyricsManager: ObservableObject {
         }
         // Lines are sorted ascending; the active line is the last one whose start is <= position.
         currentLineIndex = lines.lastIndex { $0.startTimeMs <= positionMs }
+    }
+}
+
+/// The track fields the lyrics lookup uses, compared loosely so cosmetic differences (case,
+/// accents, surrounding whitespace, sub-second duration changes) don't trigger a new lookup.
+private struct LyricsLookupKey {
+    let title: String
+    let artist: String
+    let album: String
+    let durationMs: Int
+
+    init(_ track: NowPlayingTrack) {
+        title = Self.normalized(track.title)
+        artist = Self.normalized(track.artist)
+        album = Self.normalized(track.album)
+        durationMs = track.durationMs
+    }
+
+    func differsMaterially(from other: LyricsLookupKey) -> Bool {
+        if title != other.title || artist != other.artist || album != other.album { return true }
+        // Unknown (0) becoming known counts; otherwise only a real difference does.
+        if (durationMs > 0) != (other.durationMs > 0) { return true }
+        return abs(durationMs - other.durationMs) > 1000
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
