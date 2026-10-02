@@ -517,8 +517,8 @@ private struct HelpAboutView: View {
 }
 
 #Preview {
-    let spotifyManager = SpotifyManager()
+    let services = AppServices.shared
     ContentView()
-        .environmentObject(spotifyManager)
-        .environmentObject(LyricsManager(spotifyManager: spotifyManager))
+        .environmentObject(services.spotifyManager)
+        .environmentObject(services.lyricsManager)
 }

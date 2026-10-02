@@ -25,8 +25,9 @@ struct LyricWindowSlot: Identifiable {
 }
 
 /// Owns synced-lyric state for the currently playing track: fetches lyrics once per track
-/// change (keyed by `trackURI`) and derives the active line from `SpotifyManager.playbackPositionMs`
-/// on every tick, purely locally — no network request happens on playback ticks.
+/// change (keyed by the normalized track `id`) and derives the active line from
+/// `NowPlayingStore.playbackPositionMs` on every tick, purely locally — no network request
+/// happens on playback ticks. Works the same for every music service.
 final class LyricsManager: ObservableObject {
 
     @Published private(set) var state: LyricsState = .idle
@@ -51,25 +52,26 @@ final class LyricsManager: ObservableObject {
     private var currentTrackURI: String?
     private var fetchTask: Task<Void, Never>?
 
-    init(spotifyManager: SpotifyManager, lyricsService: LyricsService = LyricsService()) {
+    init(nowPlaying: NowPlayingStore, lyricsService: LyricsService = LyricsService()) {
         self.lyricsService = lyricsService
 
-        spotifyManager.$trackURI
-            .removeDuplicates()
-            .sink { [weak self, weak spotifyManager] trackURI in
-                guard let self, let spotifyManager else { return }
-                self.handleTrackChange(trackURI: trackURI, spotifyManager: spotifyManager)
+        nowPlaying.$track
+            .removeDuplicates { $0?.id == $1?.id }
+            .sink { [weak self, weak nowPlaying] track in
+                guard let self, let nowPlaying else { return }
+                self.handleTrackChange(track: track, nowPlaying: nowPlaying)
             }
             .store(in: &cancellables)
 
-        spotifyManager.$playbackPositionMs
+        nowPlaying.$playbackPositionMs
             .sink { [weak self] positionMs in
                 self?.updateCurrentLine(for: positionMs)
             }
             .store(in: &cancellables)
     }
 
-    private func handleTrackChange(trackURI: String, spotifyManager: SpotifyManager) {
+    private func handleTrackChange(track: NowPlayingTrack?, nowPlaying: NowPlayingStore) {
+        let trackURI = track?.id ?? ""
         guard trackURI != currentTrackURI else { return }
         currentTrackURI = trackURI
 
@@ -79,15 +81,15 @@ final class LyricsManager: ObservableObject {
         plainLyrics = nil
         currentLineIndex = nil
 
-        guard !trackURI.isEmpty else {
+        guard let track, !trackURI.isEmpty else {
             state = .idle
             return
         }
 
-        let trackName = spotifyManager.trackName
-        let artistName = spotifyManager.artistName
-        let albumName = spotifyManager.albumName
-        let durationMs = spotifyManager.durationMs
+        let trackName = track.title
+        let artistName = track.artist
+        let albumName = track.album
+        let durationMs = track.durationMs
 
         state = .loading
 
@@ -108,7 +110,7 @@ final class LyricsManager: ObservableObject {
             case .synced(let parsedLines):
                 self.lines = parsedLines
                 self.state = .synced
-                self.updateCurrentLine(for: spotifyManager.playbackPositionMs)
+                self.updateCurrentLine(for: nowPlaying.playbackPositionMs)
             case .plainOnly(let text):
                 self.plainLyrics = text
                 self.state = .plainOnly

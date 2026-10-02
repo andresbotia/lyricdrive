@@ -11,6 +11,8 @@ import SwiftUI
 struct LyricDriveApp: App {
     @StateObject private var spotifyManager: SpotifyManager
     @StateObject private var lyricsManager: LyricsManager
+    @StateObject private var appleMusicManager: AppleMusicManager
+    @StateObject private var nowPlaying: NowPlayingStore
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -18,6 +20,8 @@ struct LyricDriveApp: App {
         // same instances (one App Remote connection, one playback clock, one lyrics pipeline).
         _spotifyManager = StateObject(wrappedValue: AppServices.shared.spotifyManager)
         _lyricsManager = StateObject(wrappedValue: AppServices.shared.lyricsManager)
+        _appleMusicManager = StateObject(wrappedValue: AppServices.shared.appleMusicManager)
+        _nowPlaying = StateObject(wrappedValue: AppServices.shared.nowPlaying)
     }
 
     var body: some Scene {
@@ -25,6 +29,8 @@ struct LyricDriveApp: App {
             ContentView()
                 .environmentObject(spotifyManager)
                 .environmentObject(lyricsManager)
+                .environmentObject(appleMusicManager)
+                .environmentObject(nowPlaying)
                 .onOpenURL { url in
                     spotifyManager.handleAuthorizationCallback(url: url)
                 }
@@ -33,7 +39,9 @@ struct LyricDriveApp: App {
             switch newPhase {
             case .active:
                 spotifyManager.appDidBecomeActive()
+                nowPlaying.appDidBecomeActive()
             case .inactive, .background:
+                nowPlaying.appWillResignActive()
                 // While CarPlay is connected it still needs App Remote, so the phone scene
                 // leaving the foreground must not disconnect it. CarPlaySceneDelegate applies
                 // this same disconnect later if CarPlay goes away while the phone is backgrounded.

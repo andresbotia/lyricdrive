@@ -19,6 +19,9 @@ final class AppServices {
     static let shared = AppServices()
 
     let spotifyManager: SpotifyManager
+    let appleMusicManager: AppleMusicManager
+    /// The active music service and its normalized playback state; feeds `LyricsManager`.
+    let nowPlaying: NowPlayingStore
     let lyricsManager: LyricsManager
     let liveActivityManager: LiveActivityManager
 
@@ -29,10 +32,14 @@ final class AppServices {
 
     private init() {
         // Preserves the original initialization order from LyricDriveApp.init():
-        // SpotifyManager first, then LyricsManager built on top of that same instance.
+        // SpotifyManager first, then LyricsManager built on top of the active provider's state.
         let spotifyManager = SpotifyManager()
         self.spotifyManager = spotifyManager
-        let lyricsManager = LyricsManager(spotifyManager: spotifyManager)
+        let appleMusicManager = AppleMusicManager()
+        self.appleMusicManager = appleMusicManager
+        let nowPlaying = NowPlayingStore(spotify: spotifyManager, appleMusic: appleMusicManager)
+        self.nowPlaying = nowPlaying
+        let lyricsManager = LyricsManager(nowPlaying: nowPlaying)
         self.lyricsManager = lyricsManager
         self.liveActivityManager = LiveActivityManager(spotify: spotifyManager, lyrics: lyricsManager)
     }

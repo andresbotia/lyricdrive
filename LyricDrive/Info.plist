@@ -13,6 +13,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>LyricDrive uses access to Apple Music to identify the song you're playing, show artwork and playback information, and find synchronized lyrics.</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>spotify</string>

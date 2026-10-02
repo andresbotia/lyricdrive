@@ -83,16 +83,22 @@ final class SpotifyManager: NSObject, ObservableObject {
 
     /// Delays before each remaining automatic retry of the current CarPlay reconnect sequence.
     private var autoReconnectDelays: [TimeInterval] = []
-    private var autoReconnectTask: Task<Void, Never>?
+    // Published (still private) only so SwiftUI re-reads `hasPendingReconnect` when it changes.
+    @Published private var autoReconnectTask: Task<Void, Never>?
     private var reconnectDeadlineTask: Task<Void, Never>?
     private var usedCarPlayActivationRetry = false
     private var lastFailureWasTransport = false
-    private var renewalInFlight = false
+    // Published (still private) for the same reason as `autoReconnectTask`.
+    @Published private var renewalInFlight = false
     private var reconnectAfterRenewal = false
     private var renewalAttempted = false
     private var renewalSucceeded = false
     private var reconnectTrigger: ReconnectTrigger = .sessionRestore
     private var reconnectAttempt = 0
+
+    /// Read-only for UI: `true` while a silent session renewal or a scheduled reconnect retry is
+    /// still pending, so the UI keeps showing "Reconnecting" between attempts.
+    var hasPendingReconnect: Bool { renewalInFlight || autoReconnectTask != nil }
 
     enum ReconnectTrigger: String {
         case sessionRestore, carPlayDidConnect, carPlaySceneDidBecomeActive
