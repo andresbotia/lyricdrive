@@ -18,7 +18,7 @@ import UIKit
 /// Structure: a stable two-tab root that is never rebuilt, so the driver's selected tab survives
 /// track changes, metadata enrichment, and service switches.
 /// - **Now Playing** — a details header (artwork, title, artist, previous / play-pause / next) on
-///   iOS 26.4+, or a short list on older iOS. The music app keeps owning system playback: this
+///   iOS 26.4+, or one short list section on older iOS. The music app keeps owning system playback: this
 ///   companion publishes no MediaPlayer now-playing metadata and registers no remote commands.
 /// - **Lyrics** — a list template of up to five display-only lyric rows, or one status row.
 ///   CarPlay owns all positioning.
@@ -39,7 +39,12 @@ final class CarPlayPresentationController {
     /// The items currently on screen in the Lyrics tab, kept so a line change can update them in
     /// place (no list reload) when the row count is unchanged.
     private var lyricItems: [CPListItem] = []
-    private lazy var placeholderArtwork = Self.makePlaceholderArtwork()
+    /// The car display's scale, so artwork is rendered at the screen's real pixel density.
+    private let displayScale: CGFloat
+    private lazy var placeholderArtwork = Self.makePlaceholderArtwork(side: artworkSide, scale: displayScale)
+    /// The current artwork, square-cropped and sized for this display. Kept with its source so
+    /// it's prepared once per image, not once per header update.
+    private var preparedArtwork: (source: UIImage, image: UIImage)?
     /// Control symbols, rendered once at the size the details header allows.
     private var controlImages: [String: UIImage] = [:]
 
@@ -85,7 +90,14 @@ final class CarPlayPresentationController {
         var artworkID: ObjectIdentifier?
     }
 
-    init(spotifyManager: SpotifyManager, appleMusicManager: AppleMusicManager, nowPlaying: NowPlayingStore, lyricsManager: LyricsManager) {
+    init(
+        spotifyManager: SpotifyManager,
+        appleMusicManager: AppleMusicManager,
+        nowPlaying: NowPlayingStore,
+        lyricsManager: LyricsManager,
+        displayScale: CGFloat
+    ) {
+        self.displayScale = displayScale > 0 ? displayScale : 2
         self.spotifyManager = spotifyManager
         self.appleMusicManager = appleMusicManager
         self.nowPlaying = nowPlaying
@@ -145,6 +157,7 @@ final class CarPlayPresentationController {
         lastHeader = nil
         lastLyricRows = nil
         lyricItems = []
+        preparedArtwork = nil
     }
 
     // MARK: - State translation
@@ -321,30 +334,56 @@ final class CarPlayPresentationController {
             return
         }
 
-        // Older iOS: one row for the song (artwork, title, artist) and one row per control, so
-        // all three controls sit directly below it without scrolling on typical displays.
+        // Older iOS: one concise row for the song (artwork, title, artist — no album) followed
+        // directly by one row per control, all in a single section so no section spacing pushes
+        // the controls down. All three stay visible without scrolling on typical displays.
         let song = makeMetadataItem(header.title, detailText: header.artist, image: currentArtwork)
         nowPlayingTemplate.updateSections([
-            CPListSection(items: [song]),
-            CPListSection(items: makeControlItems(isPaused: header.isPaused)),
+            CPListSection(items: [song] + makeControlItems(isPaused: header.isPaused)),
         ])
     }
 
     /// The current track's artwork, or the local placeholder. Never another song's or service's:
     /// `NowPlayingStore` clears artwork on every track and service change.
     private var currentArtwork: UIImage {
-        nowPlaying.artwork ?? placeholderArtwork
+        guard let source = nowPlaying.artwork else { return placeholderArtwork }
+        if let preparedArtwork, preparedArtwork.source === source { return preparedArtwork.image }
+        let image = Self.squareArtwork(from: source, side: artworkSide, scale: displayScale)
+        preparedArtwork = (source, image)
+        return image
     }
 
-    /// Artwork, title, artist, and the three controls — nothing else, so the controls are always
-    /// visible. Updates the existing header in place, touching only what changed.
+    /// The largest artwork the current template can show, in points: the details header's
+    /// recommended thumbnail size where the SDK reports it, otherwise a size that comfortably
+    /// covers the header (or, on older iOS, the list row's maximum image size).
+    private var artworkSide: CGFloat {
+        if #available(iOS 27.0, *) {
+            let maximum = CPThumbnailImage.maximumImageSize(forAspectRatio: 1)
+            let side = min(maximum.width, maximum.height)
+            if side > 0 { return side }
+        }
+        if #available(iOS 26.4, *) { return 300 }
+        let maximum = CPListItem.maximumImageSize
+        return max(min(maximum.width, maximum.height), 44)
+    }
+
+    /// Artwork, title, artist, and the three controls — nothing else (no album, no list rows),
+    /// so the controls are always visible and the text gets the header's whole text column.
+    /// Updates the existing header in place, touching only what changed.
+    ///
+    /// Text is never shortened here. Title and subtitle are single-line fields that CarPlay
+    /// truncates on its own, so when either string is long enough that it likely won't fit, the
+    /// complete text is also offered through `bodyVariants` — the header's only multiline,
+    /// wrapping field — ordered from most to least complete, letting CarPlay pick what fits.
     @available(iOS 26.4, *)
     private func renderDetailsHeader(_ header: HeaderState, previous: HeaderState?) {
+        let body = Self.bodyVariants(title: header.title, artist: header.artist)
         guard let details = nowPlayingTemplate.listHeader else {
             let details = CPListTemplateDetailsHeader(
                 thumbnail: CPThumbnailImage(image: currentArtwork),
                 title: header.title,
                 subtitle: header.artist,
+                bodyVariants: body,
                 actionButtons: makeHeaderButtons(isPaused: header.isPaused)
             )
             // Background tinted from the artwork, generated by CarPlay for light and dark mode.
@@ -356,12 +395,33 @@ final class CarPlayPresentationController {
 
         if details.title != header.title { details.title = header.title }
         if details.subtitle != header.artist { details.subtitle = header.artist }
+        if details.bodyVariants.map(\.string) != body.map(\.string) { details.bodyVariants = body }
         if previous?.artworkID != header.artworkID || previous?.trackID != header.trackID {
             details.thumbnail = CPThumbnailImage(image: currentArtwork)
         }
         if previous?.isPaused != header.isPaused || previous?.availability != header.availability {
             details.actionButtons = makeHeaderButtons(isPaused: header.isPaused)
         }
+    }
+
+    /// Strings longer than these are likely to be cut short in the header's single-line title and
+    /// subtitle on common car displays. Shorter ones fit, so no body text is added for them.
+    private static let comfortableTitleLength = 22
+    private static let comfortableArtistLength = 28
+
+    /// The complete title and/or artist, for the header's wrapping body text — only for the
+    /// strings that are likely truncated above it. Most complete variant first.
+    @available(iOS 26.4, *)
+    private static func bodyVariants(title: String, artist: String) -> [NSAttributedString] {
+        let longTitle = title.count > comfortableTitleLength
+        let longArtist = artist.count > comfortableArtistLength
+        let variants: [String] = switch (longTitle, longArtist) {
+        case (true, true): ["\(title)\n\(artist)", title]
+        case (true, false): [title]
+        case (false, true): [artist]
+        case (false, false): []
+        }
+        return variants.map { NSAttributedString(string: $0) }
     }
 
     private func makeMetadataItem(_ text: String, detailText: String?, image: UIImage? = nil) -> CPListItem {
@@ -409,13 +469,21 @@ final class CarPlayPresentationController {
 
     // MARK: - Controls
 
-    private enum Control {
+    private enum Control: Hashable {
         case previous, playPause, next
     }
 
+    /// Previous / Play-Pause / Next, in that order. Should a car report room for fewer than three
+    /// header buttons, the most important ones are kept (play/pause, then next) rather than letting
+    /// CarPlay drop whichever come last.
     @available(iOS 26.4, *)
     private func makeHeaderButtons(isPaused: Bool) -> [CPButton] {
-        [Control.previous, .playPause, .next].map { control in
+        let ordered: [Control] = [.previous, .playPause, .next]
+        let limit = CPListTemplateDetailsHeader.maximumActionButtonCount
+        let kept = limit > 0 && limit < ordered.count
+            ? Set([Control.playPause, .next, .previous].prefix(limit))
+            : Set(ordered)
+        return ordered.filter(kept.contains).map { control in
             CPButton(image: headerImage(for: control, isPaused: isPaused)) { [weak self] _ in
                 self?.perform(control)
             }
@@ -480,16 +548,44 @@ final class CarPlayPresentationController {
         return image
     }
 
-    // MARK: - Artwork placeholder
+    // MARK: - Artwork
+
+    /// Center-cropped to a square (aspect fill, never stretched) and rendered at the display's
+    /// pixel size, so CarPlay neither distorts nor upscales a small image. Never enlarges past the
+    /// source's own resolution.
+    private static func squareArtwork(from source: UIImage, side: CGFloat, scale: CGFloat) -> UIImage {
+        let sourcePixels = CGSize(width: source.size.width * source.scale, height: source.size.height * source.scale)
+        guard sourcePixels.width > 0, sourcePixels.height > 0 else { return source }
+        let targetSide = min(side, min(sourcePixels.width, sourcePixels.height) / scale)
+        let isSquare = abs(sourcePixels.width - sourcePixels.height) < 1
+        if isSquare, abs(source.size.width - targetSide) < 1, source.scale == scale { return source }
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = true
+        let canvas = CGSize(width: targetSide, height: targetSide)
+        return UIGraphicsImageRenderer(size: canvas, format: format).image { _ in
+            let fill = max(targetSide / source.size.width, targetSide / source.size.height)
+            let drawn = CGSize(width: source.size.width * fill, height: source.size.height * fill)
+            source.draw(in: CGRect(
+                x: (targetSide - drawn.width) / 2,
+                y: (targetSide - drawn.height) / 2,
+                width: drawn.width,
+                height: drawn.height
+            ))
+        }
+    }
 
     /// Local-only stand-in shown until the current song's artwork arrives, or when it has none.
-    private static func makePlaceholderArtwork() -> UIImage {
-        let size = CGSize(width: 300, height: 300)
-        return UIGraphicsImageRenderer(size: size).image { context in
+    private static func makePlaceholderArtwork(side: CGFloat, scale: CGFloat) -> UIImage {
+        let size = CGSize(width: side, height: side)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
             UIColor(white: 0.16, alpha: 1).setFill()
             context.fill(CGRect(origin: .zero, size: size))
 
-            let configuration = UIImage.SymbolConfiguration(pointSize: 110, weight: .regular)
+            let configuration = UIImage.SymbolConfiguration(pointSize: side * 0.37, weight: .regular)
             guard let note = UIImage(systemName: "music.note", withConfiguration: configuration)?
                 .withTintColor(UIColor(white: 0.55, alpha: 1), renderingMode: .alwaysOriginal) else { return }
             note.draw(at: CGPoint(x: (size.width - note.size.width) / 2, y: (size.height - note.size.height) / 2))

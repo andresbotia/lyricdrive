@@ -1,0 +1,525 @@
+import AppIntents
+import SwiftUI
+import UIKit
+import WidgetKit
+
+// MARK: - Timeline
+
+struct LyricDriveEntry: TimelineEntry {
+    let date: Date
+    /// `nil` until LyricDrive has written its first snapshot (the app hasn't been opened yet).
+    let snapshot: WidgetSnapshot?
+    /// The song shown may no longer be what's playing: an estimated song end has passed, or a
+    /// paused snapshot is old.
+    let isStale: Bool
+
+    var lyricWindow: WidgetSnapshot.LyricWindow {
+        snapshot?.lyricWindow(at: date) ?? .init()
+    }
+}
+
+/// Builds timelines from the snapshot LyricDrive writes to the App Group.
+///
+/// While a song with synced lyrics is playing, lyric widgets get one entry per upcoming line,
+/// timed from the snapshot's playback anchor, up to the song's estimated end — so lines keep
+/// advancing after iOS suspends LyricDrive. They are estimates: a pause, seek, or skip made in the
+/// music app while LyricDrive is suspended isn't seen until the app runs again. After the
+/// estimated end, the widget asks to be refreshed instead of guessing what plays next.
+struct LyricDriveTimelineProvider: TimelineProvider {
+    /// Lyric widgets schedule an entry per line; the playback widget doesn't need them.
+    let schedulesLyricLines: Bool
+
+    private static let maxLineEntries = 150
+    private static let horizon: TimeInterval = 30 * 60
+    /// A paused song this old is probably not what the music app has queued anymore.
+    private static let pausedStaleAfter: TimeInterval = 3 * 60 * 60
+    private static let endGrace: TimeInterval = 5
+
+    func placeholder(in context: Context) -> LyricDriveEntry {
+        LyricDriveEntry(date: Date(), snapshot: .preview, isStale: false)
+    }
+
+    func getSnapshot(in context: Context, completion: @escaping (LyricDriveEntry) -> Void) {
+        let now = Date()
+        let snapshot = WidgetSnapshotStore.load() ?? (context.isPreview ? .preview : nil)
+        completion(LyricDriveEntry(date: now, snapshot: snapshot, isStale: snapshot.map { Self.isStale($0, at: now) } ?? false))
+    }
+
+    func getTimeline(in context: Context, completion: @escaping (Timeline<LyricDriveEntry>) -> Void) {
+        let now = Date()
+        guard let snapshot = WidgetSnapshotStore.load() else {
+            completion(Timeline(entries: [LyricDriveEntry(date: now, snapshot: nil, isStale: false)], policy: .never))
+            return
+        }
+
+        var entries = [LyricDriveEntry(date: now, snapshot: snapshot, isStale: Self.isStale(snapshot, at: now))]
+        if snapshot.status == .track, let staleDate = Self.staleDate(for: snapshot), staleDate > now {
+            if schedulesLyricLines {
+                let until = min(staleDate, now.addingTimeInterval(Self.horizon))
+                for date in snapshot.lineChangeDates(after: now, until: until, limit: Self.maxLineEntries) {
+                    entries.append(LyricDriveEntry(date: date, snapshot: snapshot, isStale: false))
+                }
+            }
+            entries.append(LyricDriveEntry(date: staleDate, snapshot: snapshot, isStale: true))
+        }
+        // LyricDrive reloads the widgets itself whenever what they show changes.
+        completion(Timeline(entries: entries, policy: .never))
+    }
+
+    private static func staleDate(for snapshot: WidgetSnapshot) -> Date? {
+        if snapshot.isPaused {
+            return snapshot.writtenAt.addingTimeInterval(pausedStaleAfter)
+        }
+        return snapshot.estimatedEndDate?.addingTimeInterval(endGrace)
+    }
+
+    private static func isStale(_ snapshot: WidgetSnapshot, at date: Date) -> Bool {
+        guard snapshot.status == .track, let staleDate = staleDate(for: snapshot) else { return false }
+        return date >= staleDate
+    }
+}
+
+// MARK: - Widgets
+
+struct LyricsWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: LyricDriveWidgetKind.lyrics, provider: LyricDriveTimelineProvider(schedulesLyricLines: true)) { entry in
+            LyricsWidgetView(entry: entry)
+        }
+        .configurationDisplayName("Lyrics")
+        .description("The current synced lyric, with the lines around it.")
+        .supportedFamilies([.systemMedium, .systemLarge])
+        .contentMarginsDisabled()
+    }
+}
+
+struct CompactLyricsWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: LyricDriveWidgetKind.compactLyrics, provider: LyricDriveTimelineProvider(schedulesLyricLines: true)) { entry in
+            CompactLyricsWidgetView(entry: entry)
+        }
+        .configurationDisplayName("Lyric Glance")
+        .description("Just the current synced lyric.")
+        .supportedFamilies([.systemSmall, .accessoryRectangular])
+        .contentMarginsDisabled()
+    }
+}
+
+struct PlaybackWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: LyricDriveWidgetKind.playback, provider: LyricDriveTimelineProvider(schedulesLyricLines: false)) { entry in
+            PlaybackWidgetView(entry: entry)
+        }
+        .configurationDisplayName("Now Playing")
+        .description("The current song, with previous, play/pause, and next.")
+        .supportedFamilies([.systemSmall, .systemMedium])
+        .contentMarginsDisabled()
+    }
+}
+
+// MARK: - Style
+
+private enum WidgetStyle {
+    static let night = Color(red: 0.024, green: 0.027, blue: 0.039)
+    static let aurora = Color(red: 0.215, green: 0.825, blue: 0.948)
+    static let textPrimary = Color(red: 0.949, green: 0.953, blue: 0.965)
+    static let textSecondary = textPrimary.opacity(0.66)
+    static let textTertiary = textPrimary.opacity(0.42)
+
+    static func tint(_ snapshot: WidgetSnapshot?) -> Color? {
+        guard let tint = snapshot?.tint, tint.count == 3 else { return nil }
+        return Color(red: tint[0], green: tint[1], blue: tint[2])
+    }
+}
+
+/// Dark LyricDrive surface with a soft glow from the artwork's average color.
+private struct WidgetBackground: View {
+    let snapshot: WidgetSnapshot?
+
+    var body: some View {
+        ZStack {
+            WidgetStyle.night
+            if let tint = WidgetStyle.tint(snapshot) {
+                LinearGradient(
+                    colors: [tint.opacity(0.55), tint.opacity(0.18), .clear],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+            LinearGradient(colors: [.clear, .black.opacity(0.35)], startPoint: .top, endPoint: .bottom)
+        }
+    }
+}
+
+private extension View {
+    func lyricDriveBackground(_ snapshot: WidgetSnapshot?) -> some View {
+        containerBackground(for: .widget) { WidgetBackground(snapshot: snapshot) }
+    }
+}
+
+private struct ArtworkThumbnail: View {
+    let snapshot: WidgetSnapshot?
+    let size: CGFloat
+
+    var body: some View {
+        let radius = size * 0.2
+        Group {
+            if let image = artwork {
+                Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                Color.white.opacity(0.08)
+                    .overlay(Image(systemName: "music.note").font(.system(size: size * 0.36)).foregroundStyle(.white.opacity(0.35)))
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(0.08)))
+        .accessibilityHidden(true)
+    }
+
+    /// Only ever the snapshot's own track's file (see `WidgetSnapshotStore.writeArtwork`).
+    private var artwork: UIImage? {
+        guard let snapshot, snapshot.track != nil, let name = snapshot.artworkFileName,
+              let url = WidgetSnapshotStore.artworkURL(named: name) else { return nil }
+        return UIImage(contentsOfFile: url.path)
+    }
+}
+
+// MARK: - Shared state copy
+
+/// What a widget shows instead of lyrics or controls.
+private struct WidgetMessage {
+    let symbol: String
+    let title: String
+    let detail: String?
+
+    /// `nil` when there's a current, fresh song to show.
+    static func forEntry(_ entry: LyricDriveEntry) -> WidgetMessage? {
+        guard let snapshot = entry.snapshot else {
+            return WidgetMessage(symbol: "music.note", title: "Open LyricDrive to get started", detail: nil)
+        }
+        let name = snapshot.providerName
+        switch snapshot.status {
+        case .track:
+            return entry.isStale ? WidgetMessage(symbol: "arrow.clockwise", title: "Open LyricDrive to refresh", detail: nil) : nil
+        case .noTrack:
+            return WidgetMessage(symbol: "music.note", title: "No song playing", detail: "Play something in \(name)")
+        case .connecting:
+            return WidgetMessage(symbol: "ellipsis", title: "Connecting to \(name)…", detail: nil)
+        case .needsSetup:
+            return WidgetMessage(symbol: "link", title: "Open LyricDrive to connect", detail: nil)
+        case .disconnected:
+            return WidgetMessage(symbol: "arrow.clockwise", title: "\(name) isn't connected", detail: "Open LyricDrive to reconnect")
+        case .accessDenied:
+            return WidgetMessage(symbol: "lock.fill", title: "Apple Music access is off", detail: "Turn it on in Settings")
+        }
+    }
+
+    /// Lyric-specific status for a current song, or `nil` when synced lyrics are showing.
+    static func forLyrics(_ snapshot: WidgetSnapshot) -> String? {
+        switch snapshot.lyricsStatus {
+        case .loading: "Finding synced lyrics…"
+        case .unavailable: "Synced lyrics unavailable"
+        case .synced: nil
+        }
+    }
+}
+
+private struct MessageView: View {
+    let message: WidgetMessage
+    var compact = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+            Image(systemName: message.symbol)
+                .font(.system(size: compact ? 15 : 18, weight: .semibold))
+                .foregroundStyle(WidgetStyle.aurora)
+            Text(message.title)
+                .font((compact ? Font.subheadline : .headline).weight(.semibold))
+                .foregroundStyle(WidgetStyle.textPrimary)
+                .lineLimit(3)
+            if let detail = message.detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(WidgetStyle.textSecondary)
+                    .lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    }
+}
+
+// MARK: - Lyrics widget
+
+struct LyricsWidgetView: View {
+    let entry: LyricDriveEntry
+    @Environment(\.widgetFamily) private var family
+
+    private var isLarge: Bool { family == .systemLarge }
+
+    var body: some View {
+        content
+            .padding(isLarge ? 20 : 16)
+            .lyricDriveBackground(entry.snapshot)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let message = WidgetMessage.forEntry(entry) {
+            VStack(alignment: .leading, spacing: 0) {
+                if entry.isStale, let snapshot = entry.snapshot { header(snapshot) }
+                MessageView(message: message)
+            }
+        } else if let snapshot = entry.snapshot {
+            VStack(alignment: .leading, spacing: 0) {
+                header(snapshot)
+                Spacer(minLength: isLarge ? 12 : 6)
+                if let status = WidgetMessage.forLyrics(snapshot) {
+                    Text(status)
+                        .font(.headline)
+                        .foregroundStyle(WidgetStyle.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer(minLength: 0)
+                } else {
+                    lyrics(entry.lyricWindow)
+                }
+            }
+        }
+    }
+
+    private func header(_ snapshot: WidgetSnapshot) -> some View {
+        HStack(spacing: 10) {
+            ArtworkThumbnail(snapshot: snapshot, size: isLarge ? 40 : 30)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(snapshot.track?.title ?? "")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(WidgetStyle.textSecondary)
+                Text(snapshot.track?.artist ?? "")
+                    .font(.caption2)
+                    .foregroundStyle(WidgetStyle.textTertiary)
+            }
+            .lineLimit(1)
+            Spacer(minLength: 0)
+            if snapshot.isPaused, !entry.isStale {
+                Image(systemName: "pause.fill")
+                    .font(.caption2)
+                    .foregroundStyle(WidgetStyle.textTertiary)
+                    .accessibilityLabel("Paused")
+            }
+        }
+    }
+
+    private func lyrics(_ window: WidgetSnapshot.LyricWindow) -> some View {
+        VStack(alignment: .leading, spacing: isLarge ? 10 : 5) {
+            if isLarge, let previous = window.previous {
+                Text(previous)
+                    .font(.subheadline)
+                    .foregroundStyle(WidgetStyle.textTertiary)
+                    .lineLimit(2)
+            }
+            Text(window.current ?? "♪")
+                .font(.system(isLarge ? .title : .title3, design: .rounded, weight: .bold))
+                .foregroundStyle(WidgetStyle.textPrimary)
+                .lineLimit(isLarge ? 4 : 2)
+                .minimumScaleFactor(0.75)
+                .shadow(color: WidgetStyle.aurora.opacity(0.25), radius: 10)
+            if let next = window.next {
+                Text(next)
+                    .font(isLarge ? .headline : .subheadline)
+                    .fontWeight(.medium)
+                    .foregroundStyle(WidgetStyle.textSecondary)
+                    .lineLimit(isLarge ? 2 : 1)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+    }
+}
+
+// MARK: - Compact lyrics widget
+
+struct CompactLyricsWidgetView: View {
+    let entry: LyricDriveEntry
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        if family == .accessoryRectangular {
+            accessory
+                .containerBackground(for: .widget) { Color.clear }
+        } else {
+            small
+                .padding(14)
+                .lyricDriveBackground(entry.snapshot)
+        }
+    }
+
+    @ViewBuilder
+    private var small: some View {
+        if let message = WidgetMessage.forEntry(entry) {
+            MessageView(message: message, compact: true)
+        } else if let snapshot = entry.snapshot, let status = WidgetMessage.forLyrics(snapshot) {
+            Text(status)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(WidgetStyle.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        } else {
+            let window = entry.lyricWindow
+            VStack(alignment: .leading, spacing: 6) {
+                Text(window.current ?? "♪")
+                    .font(.system(.title3, design: .rounded, weight: .bold))
+                    .foregroundStyle(WidgetStyle.textPrimary)
+                    .lineLimit(4)
+                    .minimumScaleFactor(0.7)
+                if let next = window.next {
+                    Text(next)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(WidgetStyle.textTertiary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        }
+    }
+
+    /// Lock Screen: system-tinted, no background, just the line.
+    @ViewBuilder
+    private var accessory: some View {
+        let text: String = if let message = WidgetMessage.forEntry(entry) {
+            message.title
+        } else if let snapshot = entry.snapshot, let status = WidgetMessage.forLyrics(snapshot) {
+            status
+        } else {
+            entry.lyricWindow.current ?? "♪"
+        }
+        Text(text)
+            .font(.headline)
+            .lineLimit(3)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .widgetAccentable()
+    }
+}
+
+// MARK: - Playback widget
+
+struct PlaybackWidgetView: View {
+    let entry: LyricDriveEntry
+    @Environment(\.widgetFamily) private var family
+
+    private var isMedium: Bool { family == .systemMedium }
+
+    var body: some View {
+        content
+            .padding(isMedium ? 16 : 14)
+            .lyricDriveBackground(entry.snapshot)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let snapshot = entry.snapshot, snapshot.status == .track, let track = snapshot.track {
+            if isMedium {
+                HStack(spacing: 14) {
+                    ArtworkThumbnail(snapshot: snapshot, size: 108)
+                    VStack(alignment: .leading, spacing: 0) {
+                        metadata(track, titleLines: 2)
+                        Spacer(minLength: 8)
+                        controls(snapshot)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ArtworkThumbnail(snapshot: snapshot, size: 44)
+                    Spacer(minLength: 6)
+                    metadata(track, titleLines: 1)
+                    Spacer(minLength: 8)
+                    controls(snapshot)
+                }
+            }
+        } else if let message = WidgetMessage.forEntry(entry) {
+            MessageView(message: message, compact: !isMedium)
+        }
+    }
+
+    private func metadata(_ track: WidgetSnapshot.Track, titleLines: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(track.title)
+                .font(.headline)
+                .foregroundStyle(WidgetStyle.textPrimary)
+                .lineLimit(titleLines)
+            Text(track.artist)
+                .font(.subheadline)
+                .foregroundStyle(WidgetStyle.textSecondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Real interactive buttons (App Intents), only when LyricDrive can reach the service.
+    /// Otherwise the widget says so; tapping it opens LyricDrive.
+    @ViewBuilder
+    private func controls(_ snapshot: WidgetSnapshot) -> some View {
+        if entry.isStale {
+            Text("Open LyricDrive to refresh")
+                .font(.caption)
+                .foregroundStyle(WidgetStyle.textTertiary)
+                .lineLimit(2)
+        } else if snapshot.controlsAvailable {
+            HStack(spacing: 0) {
+                Button(intent: PreviousTrackIntent()) { controlLabel("backward.fill", prominent: false) }
+                    .accessibilityLabel("Previous")
+                Spacer(minLength: 0)
+                Button(intent: TogglePlaybackIntent()) {
+                    controlLabel(snapshot.isPaused ? "play.fill" : "pause.fill", prominent: true)
+                }
+                .accessibilityLabel(snapshot.isPaused ? "Play" : "Pause")
+                Spacer(minLength: 0)
+                Button(intent: NextTrackIntent()) { controlLabel("forward.fill", prominent: false) }
+                    .accessibilityLabel("Next")
+            }
+            .buttonStyle(.plain)
+        } else {
+            Text("Open LyricDrive to control \(snapshot.providerName)")
+                .font(.caption)
+                .foregroundStyle(WidgetStyle.textTertiary)
+                .lineLimit(2)
+        }
+    }
+
+    private func controlLabel(_ symbol: String, prominent: Bool) -> some View {
+        let side: CGFloat = prominent ? (isMedium ? 44 : 38) : (isMedium ? 36 : 30)
+        return Image(systemName: symbol)
+            .font(.system(size: prominent ? side * 0.4 : side * 0.42, weight: .semibold))
+            .foregroundStyle(prominent ? WidgetStyle.night : WidgetStyle.textPrimary)
+            .frame(width: side, height: side)
+            .background(Circle().fill(prominent ? WidgetStyle.textPrimary : .white.opacity(0.1)))
+            .contentShape(Circle())
+    }
+}
+
+// MARK: - Preview data
+
+extension WidgetSnapshot {
+    /// Widget gallery placeholder. Generic text, no real song.
+    static var preview: WidgetSnapshot {
+        WidgetSnapshot(
+            provider: "spotify",
+            providerName: "Spotify",
+            status: .track,
+            track: Track(id: "preview", title: "Midnight Drive", artist: "LyricDrive"),
+            artworkFileName: nil,
+            tint: [0.05, 0.45, 0.75],
+            isPaused: true,
+            lyricsStatus: .synced,
+            lines: [
+                Line(startMs: 0, text: "Headlights cutting through the rain"),
+                Line(startMs: 8_000, text: "Every exit looks the same"),
+                Line(startMs: 16_000, text: "Radio low, the city's asleep"),
+            ],
+            positionMs: 9_000,
+            positionDate: Date(),
+            durationMs: 210_000,
+            isLive: true,
+            controlsAvailable: true,
+            writtenAt: Date()
+        )
+    }
+}

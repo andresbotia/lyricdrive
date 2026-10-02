@@ -44,9 +44,13 @@ Both tab roots remain `CPListTemplate` in a `CPTabBarTemplate` that is created o
 
 **Data source.** CarPlay reads the normalized active-service state from `NowPlayingStore` (track, artwork, paused state, active service) and lyrics from `LyricsManager`, the same objects the iPhone UI uses. Provider-specific connection/access state is converted in one place (`makeAvailability()`), derived from the shared `MusicSessionState`; for Spotify that keeps "reconnecting" up while a renewal, automatic reconnect, or scheduled retry is pending. Controls go through `NowPlayingStore`, which routes them to the active service only.
 
-**Now Playing (iOS 26.4+).** `CPListTemplateDetailsHeader`: artwork thumbnail (local placeholder until the song's artwork arrives), title, artist, and Previous / Play-Pause / Next buttons, with no list rows, so the controls are always visible. Control symbols are rendered at the header's `maximumActionButtonSize`, and `wantsAdaptiveBackgroundStyle` tints the header from the artwork. The header is updated in place, touching only the fields that changed.
+**Now Playing (iOS 26.4+).** `CPListTemplateDetailsHeader`: artwork thumbnail (local placeholder until the song's artwork arrives), title, artist, and Previous / Play-Pause / Next buttons, with no list rows and no album, so the controls are always visible. Control symbols are rendered at the header's `maximumActionButtonSize`, and `wantsAdaptiveBackgroundStyle` tints the header from the artwork. The header is updated in place, touching only the fields that changed. If a car reports `maximumActionButtonCount` below three, play/pause and next are kept first.
 
-**Now Playing (older iOS).** One row with artwork, title, and artist, then the three control rows.
+*Artwork* is center-cropped to a square (aspect fill, never stretched) and rendered at the car's `displayScale`, at `CPThumbnailImage.maximumImageSize(forAspectRatio: 1)` on iOS 27 (300 pt on 26.x), never above the source resolution. Both providers now supply 600 × 600 source artwork (previously 300 × 300).
+
+*Text.* Nothing is shortened by LyricDrive. The header's `title`/`subtitle` are single-line and truncated by CarPlay, which is what produced "Mus…" / "Empire…". When the title is over 22 characters or the artist over 28, the complete string(s) are also passed as `bodyVariants` — the header's only multiline, wrapping field — most complete first (`title⏎artist`, then `title`), and CarPlay picks the variant that fits. The thresholds are `comfortableTitleLength` / `comfortableArtistLength` in `CarPlayPresentationController`; whether this reads well, and the header's exact geometry, has not been verified on a real car display.
+
+**Now Playing (older iOS).** One section: a row with artwork, title, and artist (no album), followed directly by the three control rows.
 
 **Status states.** Connecting/reconnecting, needs action, Apple Music access off/restricted/needed, and no song use the template's empty view (with a spinner for in-progress states). No controls are shown.
 

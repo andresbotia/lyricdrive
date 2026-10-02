@@ -39,7 +39,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             spotifyManager: services.spotifyManager,
             appleMusicManager: services.appleMusicManager,
             nowPlaying: services.nowPlaying,
-            lyricsManager: services.lyricsManager
+            lyricsManager: services.lyricsManager,
+            displayScale: interfaceController.carTraitCollection.displayScale
         )
         self.presentationController = presentationController
 

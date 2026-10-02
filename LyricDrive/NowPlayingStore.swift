@@ -178,6 +178,13 @@ final class NowPlayingStore: ObservableObject {
         if activeService == .appleMusic { appleMusic.appDidBecomeActive() }
     }
 
+    /// Re-reads the active service's state on demand, e.g. around a widget playback command that
+    /// ran while LyricDrive was in the background. Apple Music resyncs with the Music app;
+    /// Spotify pushes its state through App Remote, so there's nothing to re-read.
+    func resyncActiveService() {
+        if activeService == .appleMusic { appleMusic.appDidBecomeActive() }
+    }
+
     func appWillResignActive() {
         if activeService == .appleMusic { appleMusic.appWillResignActive() }
     }

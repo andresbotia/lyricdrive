@@ -61,14 +61,27 @@ final class AppleMusicManager: ObservableObject {
     private var anchorPositionMs = 0
     private var anchorUptime = ProcessInfo.processInfo.systemUptime
     private var catalogTask: Task<Void, Never>?
+    private var artworkRetryTask: Task<Void, Never>?
     /// Catalog values for fields the current item left empty. Kept per track so later player
     /// notifications (which rebuild the track from the item) don't drop them again.
     private var catalogMetadata: CatalogMetadata?
+    /// The current track's catalog song, once found, so a failed artwork download can be
+    /// retried without looking the song up again.
+    private var catalogSong: (trackID: String, song: Song)?
+    private var catalogLookupCount = 0
+    /// Artwork for the last few tracks, keyed by track `id`, so skipping back and forth doesn't
+    /// refetch. Cleared when Apple Music stops being the active service.
+    private var artworkCache: [String: UIImage] = [:]
+    private var artworkCacheOrder: [String] = []
     private var subscriptionTask: Task<Void, Never>?
 
     /// Re-anchor when the player's reported time differs from the interpolated one by more.
     private static let driftToleranceMs = 750
-    private static let artworkSize = CGSize(width: 300, height: 300)
+    /// Large enough for the iPhone's full-width artwork and the CarPlay details header.
+    private static let artworkSize = CGSize(width: 600, height: 600)
+    private static let maxCatalogLookups = 2
+    private static let artworkRecheckDelays: [Duration] = [.seconds(1), .seconds(3), .seconds(8)]
+    private static let artworkCacheLimit = 6
 
     // MARK: - Authorization
 
@@ -134,6 +147,8 @@ final class AppleMusicManager: ObservableObject {
     func stop() {
         stopObserving()
         clearPlayback()
+        artworkCache.removeAll()
+        artworkCacheOrder.removeAll()
         subscriptionTask?.cancel()
         subscriptionTask = nil
         canPlayCatalogContent = nil
@@ -161,7 +176,11 @@ final class AppleMusicManager: ObservableObject {
     private func clearPlayback() {
         catalogTask?.cancel()
         catalogTask = nil
+        artworkRetryTask?.cancel()
+        artworkRetryTask = nil
         catalogMetadata = nil
+        catalogSong = nil
+        catalogLookupCount = 0
         stopClock()
         track = nil
         artwork = nil
@@ -197,8 +216,11 @@ final class AppleMusicManager: ObservableObject {
             track = newTrack
             if trackChanged {
                 log("current item: \(newTrack.map { "\($0.title) — \($0.artist) [\($0.id)]" } ?? "none")")
-                loadDetails(for: item, track: newTrack)
+                resetDetails(for: newTrack)
             }
+        }
+        if let item, let track {
+            loadMissingDetails(from: item, track: track)
         }
 
         let state = player.playbackState
@@ -269,58 +291,178 @@ final class AppleMusicManager: ObservableObject {
         }
     }
 
+    /// What a catalog lookup searches with: the item's store ID when it has one, otherwise an
+    /// exact title/artist (and duration, when known) match.
+    private struct CatalogQuery {
+        let storeID: String?
+        let title: String
+        let artist: String
+        let durationMs: Int
+
+        func matches(_ song: Song) -> Bool {
+            guard Self.normalized(song.title) == Self.normalized(title),
+                  Self.normalized(song.artistName) == Self.normalized(artist) else { return false }
+            guard durationMs > 0, let duration = song.duration, duration.isFinite, duration > 0 else { return true }
+            return abs(Int((duration * 1000).rounded()) - durationMs) <= 3000
+        }
+
+        private static func normalized(_ value: String) -> String {
+            value
+                .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
     private static func isIncomplete(_ track: NowPlayingTrack) -> Bool {
         track.title.isEmpty || track.artist.isEmpty || track.album.isEmpty || track.durationMs <= 0
     }
 
-    /// Runs once per track change, never on clock ticks. Uses the item's own artwork; for
-    /// streamed tracks missing artwork or metadata, one catalog lookup fills the gaps. Filled
-    /// metadata republishes `track` (same `id`), which lets `LyricsManager` look up lyrics again
-    /// once if the lookup fields changed.
-    private func loadDetails(for item: MPMediaItem?, track: NowPlayingTrack?) {
+    /// Runs when the current track changes: clears the previous track's details, reuses cached
+    /// artwork for a song played moments ago, and schedules the bounded artwork re-checks below.
+    private func resetDetails(for track: NowPlayingTrack?) {
         catalogTask?.cancel()
         catalogTask = nil
+        artworkRetryTask?.cancel()
+        artworkRetryTask = nil
         catalogMetadata = nil
-        artwork = nil
-        guard let item, let track else { return }
+        catalogSong = nil
+        catalogLookupCount = 0
+        artwork = track.flatMap { artworkCache[$0.id] }
+        if let track, artwork == nil {
+            scheduleArtworkRechecks(for: track.id)
+        }
+    }
 
-        if let image = item.artwork?.image(at: Self.artworkSize) {
-            artwork = image
+    /// Fills in whatever the current track is still missing. Called on every player
+    /// notification and resync (never on clock ticks), so artwork the Music app only attaches
+    /// to a streamed item after playback starts is still picked up. Returns immediately once the
+    /// track has artwork and complete metadata; catalog lookups are bounded per track.
+    private func loadMissingDetails(from item: MPMediaItem, track: NowPlayingTrack) {
+        guard track.id == self.track?.id else { return }
+
+        if artwork == nil, let image = Self.localArtwork(from: item) {
+            log("artwork from now-playing item [\(track.id)]")
+            setArtwork(image, for: track.id)
         }
         let needsArtwork = artwork == nil
-        let needsMetadata = Self.isIncomplete(track)
-        guard needsArtwork || needsMetadata else { return }
-
-        let storeID = item.playbackStoreID
-        guard !storeID.isEmpty, storeID != "0" else {
-            log("no catalog ID: artworkMissing=\(needsArtwork) metadataIncomplete=\(needsMetadata)")
+        let needsMetadata = catalogMetadata == nil && Self.isIncomplete(track)
+        guard needsArtwork || needsMetadata else {
+            artworkRetryTask?.cancel()
+            artworkRetryTask = nil
             return
         }
+        guard catalogTask == nil, catalogLookupCount < Self.maxCatalogLookups else { return }
 
-        let trackID = track.id
+        let storeID = item.playbackStoreID
+        let query = CatalogQuery(
+            storeID: storeID.isEmpty || storeID == "0" ? nil : storeID,
+            title: track.title,
+            artist: track.artist,
+            durationMs: track.durationMs
+        )
+        // Without a store ID, only artwork is looked up (by exact title/artist), so a search
+        // match can never change the metadata the lyrics lookup uses.
+        guard query.storeID != nil || (needsArtwork && !query.title.isEmpty && !query.artist.isEmpty) else {
+            log("no catalog query: artworkMissing=\(needsArtwork) metadataIncomplete=\(needsMetadata)")
+            return
+        }
+        startCatalogTask(query, trackID: track.id)
+    }
+
+    /// One catalog lookup (skipped when this track's song is already known) plus, if still
+    /// needed, one artwork download. Every result is applied only if the same track is still
+    /// current, so a slow response can never land on a newer song.
+    private func startCatalogTask(_ query: CatalogQuery, trackID: String) {
+        catalogLookupCount += 1
+        let knownSong = catalogSong?.trackID == trackID ? catalogSong?.song : nil
         catalogTask = Task { [weak self] in
-            do {
-                var request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(storeID))
-                request.limit = 1
-                let response = try await request.response()
-                guard !Task.isCancelled, let self, self.track?.id == trackID, let song = response.items.first else {
-                    self?.log("catalog details unavailable")
-                    return
-                }
+            let song: Song?
+            if let knownSong {
+                song = knownSong
+            } else {
+                song = await Self.catalogSong(matching: query)
+            }
+            guard !Task.isCancelled, let self, self.track?.id == trackID else { return }
 
-                if needsMetadata {
+            if let song {
+                self.catalogSong = (trackID, song)
+                if query.storeID != nil, self.catalogMetadata == nil {
                     self.applyCatalogMetadata(from: song, trackID: trackID)
                 }
-
-                guard needsArtwork,
-                      let url = song.artwork?.url(width: Int(Self.artworkSize.width), height: Int(Self.artworkSize.height)),
-                      url.scheme == "https" || url.scheme == "http" else { return }
-                let (data, _) = try await URLSession.shared.data(from: url)
-                guard !Task.isCancelled, self.track?.id == trackID, let image = UIImage(data: data) else { return }
-                self.artwork = image
-            } catch {
-                self?.log("catalog lookup failed: \(error.localizedDescription)")
+                if self.artwork == nil, let image = await Self.downloadArtwork(for: song) {
+                    if !Task.isCancelled, self.track?.id == trackID, self.artwork == nil {
+                        self.log("artwork from catalog [\(trackID)]")
+                        self.setArtwork(image, for: trackID)
+                    }
+                }
+            } else {
+                self.log("catalog details unavailable (attempt \(self.catalogLookupCount))")
             }
+            if self.track?.id == trackID { self.catalogTask = nil }
+        }
+    }
+
+    /// Streamed items often reach LyricDrive before the Music app has attached their artwork,
+    /// and that late attachment posts no notification. A few spaced re-checks per track (not a
+    /// poll) cover it; they stop as soon as artwork arrives or the track changes.
+    private func scheduleArtworkRechecks(for trackID: String) {
+        artworkRetryTask = Task { [weak self] in
+            for delay in Self.artworkRecheckDelays {
+                try? await Task.sleep(for: delay)
+                guard !Task.isCancelled, let self, self.isObserving,
+                      let track = self.track, track.id == trackID, self.artwork == nil else { return }
+                guard let item = self.player.nowPlayingItem, Self.makeTrack(from: item).id == trackID else { return }
+                self.loadMissingDetails(from: item, track: track)
+            }
+        }
+    }
+
+    private func setArtwork(_ image: UIImage, for trackID: String) {
+        artwork = image
+        artworkCache[trackID] = image
+        artworkCacheOrder.removeAll { $0 == trackID }
+        artworkCacheOrder.append(trackID)
+        while artworkCacheOrder.count > Self.artworkCacheLimit {
+            artworkCache[artworkCacheOrder.removeFirst()] = nil
+        }
+    }
+
+    /// The item's embedded artwork, if the Music app has it yet. Streamed items can carry an
+    /// artwork object that doesn't render an image until later.
+    private static func localArtwork(from item: MPMediaItem) -> UIImage? {
+        guard let image = item.artwork?.image(at: artworkSize), image.size.width > 1, image.size.height > 1 else { return nil }
+        return image
+    }
+
+    private static func catalogSong(matching query: CatalogQuery) async -> Song? {
+        do {
+            if let storeID = query.storeID {
+                var request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(storeID))
+                request.limit = 1
+                if let song = try await request.response().items.first { return song }
+            }
+            // No store ID (or it isn't a catalog song): only an exact title/artist match counts,
+            // so another song's artwork is never shown.
+            guard !query.title.isEmpty, !query.artist.isEmpty, !Task.isCancelled else { return nil }
+            var search = MusicCatalogSearchRequest(term: "\(query.title) \(query.artist)", types: [Song.self])
+            search.limit = 10
+            return try await search.response().songs.first { query.matches($0) }
+        } catch {
+            logStatic("catalog lookup failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private static func downloadArtwork(for song: Song) async -> UIImage? {
+        guard let url = song.artwork?.url(width: Int(artworkSize.width), height: Int(artworkSize.height)),
+              url.scheme == "https" || url.scheme == "http" else { return nil }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
+            return UIImage(data: data)
+        } catch {
+            logStatic("artwork download failed: \(error.localizedDescription)")
+            return nil
         }
     }
 
@@ -351,13 +493,19 @@ final class AppleMusicManager: ObservableObject {
         updateInterpolatedPosition()
     }
 
-    private func updateInterpolatedPosition() {
+    /// The interpolated position computed from the anchor on demand, so it stays accurate while
+    /// the local clock is stopped in the background (as far as LyricDrive can see).
+    var anchoredPositionMs: Int {
         var positionMs = anchorPositionMs
         if !isPaused {
             positionMs += Int(((ProcessInfo.processInfo.systemUptime - anchorUptime) * 1000).rounded())
         }
         let durationMs = track?.durationMs ?? 0
-        playbackPositionMs = durationMs > 0 ? min(max(positionMs, 0), durationMs) : max(positionMs, 0)
+        return durationMs > 0 ? min(max(positionMs, 0), durationMs) : max(positionMs, 0)
+    }
+
+    private func updateInterpolatedPosition() {
+        playbackPositionMs = anchoredPositionMs
     }
 
     private func startClock() {

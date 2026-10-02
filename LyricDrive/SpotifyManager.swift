@@ -519,10 +519,13 @@ final class SpotifyManager: NSObject, ObservableObject {
         playbackAnchorRevision &+= 1
     }
 
+    /// Large enough for the iPhone's full-width artwork and the CarPlay details header.
+    private static let artworkSize = CGSize(width: 600, height: 600)
+
     /// Fetches artwork for `track` via App Remote's image API (no Web API involved). Guards
     /// against a callback for a track we've since moved on from overwriting current artwork.
     private func requestArtwork(for track: SPTAppRemoteTrack, trackURI requestedTrackURI: String) {
-        appRemote.imageAPI?.fetchImage(forItem: track, with: CGSize(width: 300, height: 300), callback: { [weak self] result, error in
+        appRemote.imageAPI?.fetchImage(forItem: track, with: Self.artworkSize, callback: { [weak self] result, error in
             guard let self, self.trackURI == requestedTrackURI else { return }
             guard error == nil, let image = result as? UIImage else { return }
             self.albumArtwork = image

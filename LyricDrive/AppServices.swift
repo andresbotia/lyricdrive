@@ -12,8 +12,8 @@ import Foundation
 /// Scenes are created and destroyed independently by UIKit, so neither can own these — hence a
 /// single shared container.
 ///
-/// Deliberately minimal: it holds exactly the two managers the CarPlay scene needs to share with
-/// the phone scene, and nothing else in the app was converted to a singleton.
+/// Deliberately minimal: it holds the managers the CarPlay scene and widget intents need to share
+/// with the phone scene, and nothing else in the app was converted to a singleton.
 @MainActor
 final class AppServices {
     static let shared = AppServices()
@@ -24,6 +24,8 @@ final class AppServices {
     let nowPlaying: NowPlayingStore
     let lyricsManager: LyricsManager
     let liveActivityManager: LiveActivityManager
+    /// Shares normalized now-playing state with LyricDrive's widgets.
+    let widgetSnapshotPublisher: WidgetSnapshotPublisher
 
     /// `true` while a CarPlay template scene is connected. Set only by `CarPlaySceneDelegate`;
     /// read by the phone scene's lifecycle handling so backgrounding the iPhone UI doesn't drop
@@ -43,5 +45,30 @@ final class AppServices {
         let lyricsManager = LyricsManager(nowPlaying: nowPlaying)
         self.lyricsManager = lyricsManager
         self.liveActivityManager = LiveActivityManager(spotify: spotifyManager, lyrics: lyricsManager, nowPlaying: nowPlaying)
+        let widgetSnapshotPublisher = WidgetSnapshotPublisher(
+            spotify: spotifyManager,
+            appleMusic: appleMusicManager,
+            nowPlaying: nowPlaying,
+            lyrics: lyricsManager,
+            isCarPlayConnected: { AppServices.shared.isCarPlayConnected }
+        )
+        self.widgetSnapshotPublisher = widgetSnapshotPublisher
+
+        // Widget playback buttons, performed in this process. Routed through the active service
+        // exactly like the iPhone and CarPlay controls; each is a no-op without a current song.
+        WidgetPlaybackRouter.handler = { [weak nowPlaying, weak widgetSnapshotPublisher] command in
+            guard let nowPlaying else { return }
+            // The Music app may have changed songs while LyricDrive was suspended.
+            nowPlaying.resyncActiveService()
+            switch command {
+            case .previous: nowPlaying.previousTrack()
+            case .playPause: nowPlaying.togglePlayPause()
+            case .next: nowPlaying.nextTrack()
+            }
+            // Give the service a moment to report its new state, so the widget reloads with it.
+            try? await Task.sleep(for: .milliseconds(600))
+            nowPlaying.resyncActiveService()
+            widgetSnapshotPublisher?.writeNow()
+        }
     }
 }

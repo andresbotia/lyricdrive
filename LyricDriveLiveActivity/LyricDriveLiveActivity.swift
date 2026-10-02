@@ -4,7 +4,12 @@ import WidgetKit
 
 @main
 struct LyricDriveLiveActivityBundle: WidgetBundle {
-    var body: some Widget { LyricDriveLiveActivity() }
+    var body: some Widget {
+        LyricDriveLiveActivity()
+        LyricsWidget()
+        CompactLyricsWidget()
+        PlaybackWidget()
+    }
 }
 
 struct LyricDriveLiveActivity: Widget {
