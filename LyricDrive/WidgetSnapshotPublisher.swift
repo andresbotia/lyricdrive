@@ -96,12 +96,33 @@ final class WidgetSnapshotPublisher {
         NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in
                 self?.isAppActive = true
+                #if DEBUG
+                Self.printDebugLog()
+                #endif
                 self?.scheduleWrite()
             }
             .store(in: &cancellables)
 
+        #if DEBUG
+        for line in WidgetSnapshot.debugScheduleSelfCheck() {
+            Self.debugLogger.debug("\(line, privacy: .public)")
+        }
+        #endif
         scheduleWrite()
     }
+
+    #if DEBUG
+    private static let debugLogger = Logger(subsystem: "com.andresbotia.LyricDrive", category: "Widgets")
+
+    /// Prints what the app and the widget extension logged while LyricDrive was away (e.g. a
+    /// drive), then clears it.
+    private static func printDebugLog() {
+        let lines = WidgetDebugLog.drain()
+        guard !lines.isEmpty else { return }
+        debugLogger.debug("widget debug log (\(lines.count) lines):")
+        for line in lines { debugLogger.debug("\(line, privacy: .public)") }
+    }
+    #endif
 
     // MARK: - Scheduling
 
@@ -130,9 +151,9 @@ final class WidgetSnapshotPublisher {
         WidgetSnapshotStore.save(snapshot)
         lastWritten = snapshot
         #if DEBUG
-        Logger(subsystem: "com.andresbotia.LyricDrive", category: "Widgets").debug(
-            "snapshot: \(snapshot.provider, privacy: .public) \(snapshot.status.rawValue, privacy: .public) track=\(snapshot.track?.id ?? "-", privacy: .public) paused=\(snapshot.isPaused) positionMs=\(snapshot.positionMs) live=\(snapshot.isLive) controls=\(snapshot.controlsAvailable) lyrics=\(snapshot.lyricsStatus.rawValue, privacy: .public) artwork=\(snapshot.artworkFileName != nil)"
-        )
+        let line = "snapshot write (reloading widgets, app \(isAppActive ? "active" : "background")): \(snapshot.provider) \(snapshot.status.rawValue) track=\(snapshot.track?.id ?? "-") paused=\(snapshot.isPaused) positionMs=\(snapshot.positionMs) at \(WidgetDebugLog.timestamp(snapshot.positionDate)) durationMs=\(snapshot.durationMs) live=\(snapshot.isLive) controls=\(snapshot.controlsAvailable) lyrics=\(snapshot.lyricsStatus.rawValue) lines=\(snapshot.lines.count) artwork=\(snapshot.artworkFileName != nil)"
+        Self.debugLogger.debug("\(line, privacy: .public)")
+        WidgetDebugLog.append([line])
         #endif
         WidgetCenter.shared.reloadTimelines(ofKind: LyricDriveWidgetKind.lyrics)
         WidgetCenter.shared.reloadTimelines(ofKind: LyricDriveWidgetKind.compactLyrics)

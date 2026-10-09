@@ -109,13 +109,20 @@ extension WidgetSnapshot {
         return positionDate.addingTimeInterval(Double(durationMs - positionMs) / 1000)
     }
 
-    nonisolated func lyricWindow(at date: Date) -> LyricWindow {
+    /// The synced line current at song position `positionMs`; `nil` before the first timestamp
+    /// or without synced lines.
+    nonisolated func lineIndex(atPositionMs position: Int) -> Int? {
+        guard lyricsStatus == .synced else { return nil }
+        return lines.lastIndex { $0.startMs <= position }
+    }
+
+    /// The window around line `index`; `nil` means before the first line.
+    nonisolated func lyricWindow(lineIndex index: Int?) -> LyricWindow {
         guard lyricsStatus == .synced, !lines.isEmpty else { return LyricWindow() }
-        let position = estimatedPositionMs(at: date)
         func text(at index: Int) -> String? {
             lines.indices.contains(index) ? Self.displayText(lines[index].text) : nil
         }
-        guard let index = lines.lastIndex(where: { $0.startMs <= position }) else {
+        guard let index else {
             // Before the first timestamp: nothing is current yet; the first lines are next.
             return LyricWindow(current: nil, next: text(at: 0), next2: text(at: 1))
         }
@@ -128,18 +135,35 @@ extension WidgetSnapshot {
         )
     }
 
-    /// The dates after `start` at which the current lyric line changes, up to `end`.
-    nonisolated func lineChangeDates(after start: Date, until end: Date, limit: Int) -> [Date] {
-        guard !isPaused, lyricsStatus == .synced, !lines.isEmpty else { return [] }
-        let startPosition = estimatedPositionMs(at: start)
-        var dates: [Date] = []
-        for line in lines where line.startMs > startPosition {
-            // A few milliseconds late, so the entry's estimated position falls inside the line.
-            let date = positionDate.addingTimeInterval(Double(line.startMs - positionMs) / 1000 + 0.05)
-            guard date <= end, dates.count < limit else { break }
-            dates.append(date)
+    /// One step of a lyric widget timeline: from `date`, line `lineIndex` is current.
+    nonisolated struct LyricStep: Equatable, Sendable {
+        var date: Date
+        /// `nil` before the first line.
+        var lineIndex: Int?
+    }
+
+    /// The lyric steps from `now` on, as absolute wall-clock dates on the playback anchor:
+    ///
+    ///     date = positionDate + (line.startMs − positionMs)
+    ///
+    /// The first step is `now`, with the line current then. Each later step is a line start
+    /// after `now` and before `end`, with that line's index. Paused or unsynced snapshots get only
+    /// the first step. `isComplete` is `false` when `limit` line steps cut the schedule short.
+    nonisolated func lyricSchedule(from now: Date, until end: Date, limit: Int) -> (steps: [LyricStep], isComplete: Bool) {
+        let nowPosition = estimatedPositionMs(at: now)
+        var steps = [LyricStep(date: now, lineIndex: lineIndex(atPositionMs: nowPosition))]
+        guard !isPaused, lyricsStatus == .synced else { return (steps, true) }
+        for index in lines.indices where lines[index].startMs > nowPosition {
+            let startMs = lines[index].startMs
+            // Lines sharing a timestamp: only the last of them is ever current.
+            if lines.indices.contains(index + 1), lines[index + 1].startMs == startMs { continue }
+            let date = positionDate.addingTimeInterval(Double(startMs - positionMs) / 1000)
+            guard date < end else { break }
+            guard date > now else { continue }
+            guard steps.count <= limit else { return (steps, false) }
+            steps.append(LyricStep(date: date, lineIndex: index))
         }
-        return dates
+        return (steps, true)
     }
 
     /// Empty LRC lines mark instrumental breaks.
@@ -148,6 +172,82 @@ extension WidgetSnapshot {
         return trimmed.isEmpty ? "♪" : trimmed
     }
 }
+
+#if DEBUG
+/// Debug builds only: a small log in the App Group shared by the app (snapshot writes) and the
+/// widget extension (timeline builds), so a drive without Xcode attached can be read back
+/// afterwards. The app prints and clears it when it becomes active.
+nonisolated enum WidgetDebugLog {
+    private static let key = "widget.debugLog"
+    private static let limit = 400
+
+    static func append(_ lines: [String]) {
+        guard let defaults = LyricDriveAppGroup.defaults else { return }
+        let stamp = timestamp(Date())
+        var log = defaults.stringArray(forKey: key) ?? []
+        log.append(contentsOf: lines.map { "\(stamp) \($0)" })
+        defaults.set(Array(log.suffix(limit)), forKey: key)
+    }
+
+    static func drain() -> [String] {
+        guard let defaults = LyricDriveAppGroup.defaults else { return [] }
+        let log = defaults.stringArray(forKey: key) ?? []
+        defaults.removeObject(forKey: key)
+        return log
+    }
+
+    static func timestamp(_ date: Date) -> String {
+        date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).second(.twoDigits).secondFraction(.fractional(3)))
+    }
+}
+
+extension WidgetSnapshot {
+    /// Debug builds only: checks `lyricSchedule` against a fictional track with known answers.
+    /// Returns report lines; the first says PASS or FAIL.
+    nonisolated static func debugScheduleSelfCheck() -> [String] {
+        let anchor = Date(timeIntervalSinceReferenceDate: 812_000_000) // a fixed, arbitrary date
+        let lines = [(22_400, "Line zero"), (26_100, "Line one"), (28_900, "Line two"),
+                     (31_500, "Line three"), (35_000, "Line four"), (39_200, "Line five"),
+                     (44_750, "Line six"), (44_750, "Line six (same time)"), (52_000, "Line seven")]
+        var snapshot = WidgetSnapshot(
+            provider: "debug", providerName: "Debug", status: .track,
+            track: Track(id: "debug:self-check", title: "Self Check", artist: "LyricDrive"),
+            artworkFileName: nil, tint: nil, isPaused: false, lyricsStatus: .synced,
+            lines: lines.map { Line(startMs: $0.0, text: $0.1) },
+            positionMs: 30_000, positionDate: anchor, durationMs: 50_000,
+            isLive: true, controlsAvailable: false, writtenAt: anchor
+        )
+        var failures: [String] = []
+        func check(_ condition: Bool, _ message: String) { if !condition { failures.append(message) } }
+
+        // Playing, anchored at 30.0 s: line 2 now, then 3…6 at their offsets; line 7 is past the end.
+        let end = anchor.addingTimeInterval(20)
+        let playing = snapshot.lyricSchedule(from: anchor, until: end, limit: 150)
+        let offsets = playing.steps.map { $0.date.timeIntervalSince(anchor) }
+        check(playing.steps.map(\.lineIndex) == [2, 3, 4, 5, 7], "indices \(playing.steps.map(\.lineIndex))")
+        check(zip(offsets, [0, 1.5, 5.0, 9.2, 14.75]).allSatisfy { abs($0 - $1) < 0.001 } && offsets.count == 5, "offsets \(offsets)")
+        check(playing.isComplete, "playing schedule incomplete")
+
+        // Built later from the same anchor: the past lines are skipped, the dates don't move.
+        let later = snapshot.lyricSchedule(from: anchor.addingTimeInterval(6), until: end, limit: 150)
+        check(later.steps.map(\.lineIndex) == [4, 5, 7], "later indices \(later.steps.map(\.lineIndex))")
+        check(later.steps.dropFirst().first.map { abs($0.date.timeIntervalSince(anchor) - 9.2) < 0.001 } == true, "later dates moved")
+
+        // The limit cuts the schedule short and says so.
+        let limited = snapshot.lyricSchedule(from: anchor, until: end, limit: 2)
+        check(limited.steps.count == 3 && !limited.isComplete, "limit \(limited.steps.count) \(limited.isComplete)")
+
+        // Paused: only the current line.
+        snapshot.isPaused = true
+        let paused = snapshot.lyricSchedule(from: anchor.addingTimeInterval(60), until: end.addingTimeInterval(60), limit: 150)
+        check(paused.steps.map(\.lineIndex) == [2], "paused \(paused.steps.map(\.lineIndex))")
+
+        var report = [failures.isEmpty ? "schedule self-check PASS" : "schedule self-check FAIL: \(failures.joined(separator: "; "))"]
+        report += playing.steps.map { "  +\(String(format: "%.3f", $0.date.timeIntervalSince(anchor)))s -> line \($0.lineIndex.map(String.init) ?? "-")" }
+        return report
+    }
+}
+#endif
 
 /// Reads and writes the snapshot and its artwork in the App Group container.
 nonisolated enum WidgetSnapshotStore {

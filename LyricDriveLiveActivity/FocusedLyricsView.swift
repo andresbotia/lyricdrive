@@ -5,9 +5,10 @@ import SwiftUI
 /// background) and the small size.
 ///
 /// Up to five rows — two lines before, the current line, two after — with emphasis falling off
-/// away from the current line. Sizes follow the widget's height rather than squeezing text to
-/// force five rows in: when long lines wrap and five don't fit, rows are dropped in priority
-/// order (next +2, previous −2, then the next line) before the current line ever is. No
+/// away from the current line. Sizes follow the widget's height, compact enough that five rows
+/// usually fit: when long lines wrap and five don't, context gives way in priority order (wrapped
+/// context to one line, next +2, previous −2, then the next line) before the current line is ever
+/// truncated. No
 /// metadata, artwork, or animation, and no reliance on the background for contrast.
 struct FocusedLyricsView: View {
     enum Content: Equatable {
@@ -39,7 +40,8 @@ struct FocusedLyricsView: View {
 
     // MARK: Layout
 
-    /// Text sizes derived from the available height, within readable bounds.
+    /// Text sizes derived from the available height, within readable bounds. Sized so five rows
+    /// usually fit at once: context matters more at a glance than one oversized line.
     private struct Metrics {
         let current: CGFloat
         let near: CGFloat
@@ -47,10 +49,10 @@ struct FocusedLyricsView: View {
         let spacing: CGFloat
 
         init(height: CGFloat) {
-            current = min(max(height * 0.135, 17), 30)
-            near = max(current * 0.7, 14)
-            far = max(current * 0.6, 12)
-            spacing = max(current * 0.28, 4)
+            current = min(max(height * 0.11, 18), 24)
+            near = min(max(current * 0.74, 14), 18)
+            far = min(max(current * 0.62, 13), 15)
+            spacing = max(current * 0.2, 3)
         }
     }
 
@@ -100,8 +102,8 @@ struct FocusedLyricsView: View {
             Text(current)
                 .font(.system(size: metrics.current, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
-                .lineLimit(6)
-                .minimumScaleFactor(0.6)
+                .lineLimit(5)
+                .minimumScaleFactor(0.75)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(window.current.map { "Current lyric: \($0)" } ?? "Lyrics are about to start")

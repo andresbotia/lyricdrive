@@ -2,6 +2,9 @@ import AppIntents
 import SwiftUI
 import UIKit
 import WidgetKit
+#if DEBUG
+import os
+#endif
 
 // MARK: - Timeline
 
@@ -12,20 +15,40 @@ struct LyricDriveEntry: TimelineEntry {
     /// The song shown may no longer be what's playing: an estimated song end has passed, or a
     /// paused snapshot is old.
     let isStale: Bool
+    /// The synced line this entry shows, fixed when the timeline was built (`nil` before the
+    /// first line), so each entry renders on its own without recomputing playback position.
+    let lineIndex: Int?
+
+    init(date: Date, snapshot: WidgetSnapshot?, isStale: Bool, lineIndex: Int?) {
+        self.date = date
+        self.snapshot = snapshot
+        self.isStale = isStale
+        self.lineIndex = lineIndex
+    }
+
+    /// The line from the snapshot's playback anchor at `date` (placeholders, snapshots, previews).
+    init(date: Date, snapshot: WidgetSnapshot?, isStale: Bool) {
+        let lineIndex = snapshot.flatMap { $0.lineIndex(atPositionMs: $0.estimatedPositionMs(at: date)) }
+        self.init(date: date, snapshot: snapshot, isStale: isStale, lineIndex: lineIndex)
+    }
 
     var lyricWindow: WidgetSnapshot.LyricWindow {
-        snapshot?.lyricWindow(at: date) ?? .init()
+        snapshot?.lyricWindow(lineIndex: lineIndex) ?? .init()
     }
 }
 
 /// Builds timelines from the snapshot LyricDrive writes to the App Group.
 ///
-/// While a song with synced lyrics is playing, lyric widgets get one entry per upcoming line,
-/// timed from the snapshot's playback anchor, up to the song's estimated end — so lines keep
-/// advancing after iOS suspends LyricDrive. They are estimates: a pause, seek, or skip made in the
-/// music app while LyricDrive is suspended isn't seen until the app runs again. After the
-/// estimated end, the widget asks to be refreshed instead of guessing what plays next.
+/// While a song with synced lyrics is playing, lyric widgets get one entry per remaining line,
+/// dated in wall-clock time from the snapshot's playback anchor
+/// (`positionDate + (line.startMs − positionMs)`), each carrying its own line index — so lines
+/// keep advancing after iOS suspends LyricDrive. They are estimates: a pause, seek, or skip made
+/// in the music app while LyricDrive is suspended isn't seen until the app runs again. After the
+/// last entry (the estimated song end, or the last line scheduled) WidgetKit asks for a new
+/// timeline, which picks up any snapshot written since.
 struct LyricDriveTimelineProvider: TimelineProvider {
+    /// Only used in debug logs.
+    let kind: String
     /// Lyric widgets schedule an entry per line; the playback widget doesn't need them.
     let schedulesLyricLines: Bool
 
@@ -46,24 +69,50 @@ struct LyricDriveTimelineProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<LyricDriveEntry>) -> Void) {
-        let now = Date()
-        guard let snapshot = WidgetSnapshotStore.load() else {
-            completion(Timeline(entries: [LyricDriveEntry(date: now, snapshot: nil, isStale: false)], policy: .never))
-            return
+        let timeline = makeTimeline(now: Date(), snapshot: WidgetSnapshotStore.load())
+        #if DEBUG
+        log(timeline, family: context.family)
+        #endif
+        completion(timeline)
+    }
+
+    private func makeTimeline(now: Date, snapshot: WidgetSnapshot?) -> Timeline<LyricDriveEntry> {
+        guard let snapshot else {
+            return Timeline(entries: [LyricDriveEntry(date: now, snapshot: nil, isStale: false)], policy: .never)
+        }
+        guard snapshot.status == .track, !Self.isStale(snapshot, at: now) else {
+            // Nothing to schedule; LyricDrive reloads the widgets itself when this changes.
+            return Timeline(entries: [LyricDriveEntry(date: now, snapshot: snapshot, isStale: Self.isStale(snapshot, at: now))], policy: .never)
         }
 
-        var entries = [LyricDriveEntry(date: now, snapshot: snapshot, isStale: Self.isStale(snapshot, at: now))]
-        if snapshot.status == .track, let staleDate = Self.staleDate(for: snapshot), staleDate > now {
-            if schedulesLyricLines {
-                let until = min(staleDate, now.addingTimeInterval(Self.horizon))
-                for date in snapshot.lineChangeDates(after: now, until: until, limit: Self.maxLineEntries) {
-                    entries.append(LyricDriveEntry(date: date, snapshot: snapshot, isStale: false))
-                }
-            }
-            entries.append(LyricDriveEntry(date: staleDate, snapshot: snapshot, isStale: true))
+        // `nil` while playing a song of unknown duration: lines are still scheduled, up to the
+        // horizon, but there's no estimated end to mark the song stale at.
+        let staleDate = Self.staleDate(for: snapshot)
+        let horizonEnd = now.addingTimeInterval(Self.horizon)
+        let scheduleEnd = min(staleDate ?? horizonEnd, horizonEnd)
+        let schedule = schedulesLyricLines
+            ? snapshot.lyricSchedule(from: now, until: scheduleEnd, limit: Self.maxLineEntries)
+            : (steps: [WidgetSnapshot.LyricStep(date: now, lineIndex: nil)], isComplete: true)
+
+        var entries = schedule.steps.map {
+            LyricDriveEntry(date: $0.date, snapshot: snapshot, isStale: false, lineIndex: $0.lineIndex)
         }
-        // LyricDrive reloads the widgets itself whenever what they show changes.
-        completion(Timeline(entries: entries, policy: .never))
+        let lastLine = entries.last?.lineIndex
+        let reachedHorizon = schedulesLyricLines && !snapshot.isPaused && scheduleEnd < (staleDate ?? .distantFuture)
+        if !schedule.isComplete {
+            // Too many lines: the reload after the last one continues from the same anchor.
+        } else if reachedHorizon {
+            // A very long song, or one of unknown duration: hold the last line until the horizon,
+            // then continue from the same anchor.
+            if scheduleEnd > entries[entries.count - 1].date {
+                entries.append(LyricDriveEntry(date: scheduleEnd, snapshot: snapshot, isStale: false, lineIndex: lastLine))
+            }
+        } else if let staleDate {
+            entries.append(LyricDriveEntry(date: staleDate, snapshot: snapshot, isStale: true, lineIndex: lastLine))
+        }
+        // After the last entry WidgetKit asks again, picking up any snapshot written since (e.g. one
+        // whose reload request iOS deferred). Never a per-line or per-second reload.
+        return Timeline(entries: entries, policy: entries.count > 1 ? .atEnd : .never)
     }
 
     private static func staleDate(for snapshot: WidgetSnapshot) -> Date? {
@@ -77,13 +126,42 @@ struct LyricDriveTimelineProvider: TimelineProvider {
         guard snapshot.status == .track, let staleDate = staleDate(for: snapshot) else { return false }
         return date >= staleDate
     }
+
+    #if DEBUG
+    private func log(_ timeline: Timeline<LyricDriveEntry>, family: WidgetFamily) {
+        let entries = timeline.entries
+        let policy = switch timeline.policy {
+        case .atEnd: "atEnd"
+        case .never: "never"
+        default: "after"
+        }
+        var lines: [String]
+        if let snapshot = entries.first?.snapshot {
+            let now = entries[0].date
+            lines = [
+                "timeline \(kind) \(family) provider=\(snapshot.provider) status=\(snapshot.status.rawValue) song=\(snapshot.track?.id ?? "-") \"\(snapshot.track?.title ?? "-")\"",
+                "  anchor positionMs=\(snapshot.positionMs) at \(WidgetDebugLog.timestamp(snapshot.positionDate)) (written \(WidgetDebugLog.timestamp(snapshot.writtenAt))) estimatedNowMs=\(snapshot.estimatedPositionMs(at: now)) durationMs=\(snapshot.durationMs) paused=\(snapshot.isPaused) live=\(snapshot.isLive) lyrics=\(snapshot.lyricsStatus.rawValue)",
+                "  currentLine=\(entries[0].lineIndex.map(String.init) ?? "-") of \(snapshot.lines.count) entries=\(entries.count) first=\(WidgetDebugLog.timestamp(now)) last=\(WidgetDebugLog.timestamp(entries[entries.count - 1].date)) policy=\(policy)",
+            ]
+            for entry in entries.prefix(6) {
+                let text = entry.lineIndex.flatMap { snapshot.lines.indices.contains($0) ? snapshot.lines[$0].text : nil } ?? ""
+                lines.append("    \(WidgetDebugLog.timestamp(entry.date)) line=\(entry.lineIndex.map(String.init) ?? "-") stale=\(entry.isStale) \"\(text.prefix(28))\"")
+            }
+        } else {
+            lines = ["timeline \(kind) \(family) no snapshot entries=\(entries.count) policy=\(policy)"]
+        }
+        let logger = Logger(subsystem: "com.andresbotia.LyricDrive", category: "WidgetTimeline")
+        for line in lines { logger.debug("\(line, privacy: .public)") }
+        WidgetDebugLog.append(lines)
+    }
+    #endif
 }
 
 // MARK: - Widgets
 
 struct LyricsWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: LyricDriveWidgetKind.lyrics, provider: LyricDriveTimelineProvider(schedulesLyricLines: true)) { entry in
+        StaticConfiguration(kind: LyricDriveWidgetKind.lyrics, provider: LyricDriveTimelineProvider(kind: LyricDriveWidgetKind.lyrics, schedulesLyricLines: true)) { entry in
             LyricsWidgetView(entry: entry)
         }
         .configurationDisplayName("Lyrics")
@@ -98,7 +176,7 @@ struct LyricsWidget: Widget {
 
 struct CompactLyricsWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: LyricDriveWidgetKind.compactLyrics, provider: LyricDriveTimelineProvider(schedulesLyricLines: true)) { entry in
+        StaticConfiguration(kind: LyricDriveWidgetKind.compactLyrics, provider: LyricDriveTimelineProvider(kind: LyricDriveWidgetKind.compactLyrics, schedulesLyricLines: true)) { entry in
             CompactLyricsWidgetView(entry: entry)
         }
         .configurationDisplayName("Lyric Glance")
@@ -110,7 +188,7 @@ struct CompactLyricsWidget: Widget {
 
 struct PlaybackWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: LyricDriveWidgetKind.playback, provider: LyricDriveTimelineProvider(schedulesLyricLines: false)) { entry in
+        StaticConfiguration(kind: LyricDriveWidgetKind.playback, provider: LyricDriveTimelineProvider(kind: LyricDriveWidgetKind.playback, schedulesLyricLines: false)) { entry in
             PlaybackWidgetView(entry: entry)
         }
         .configurationDisplayName("Now Playing")
