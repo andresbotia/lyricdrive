@@ -34,7 +34,6 @@ struct WhatsNewView: View {
     private static let items = [
         Item(symbol: "music.note", title: "Apple Music", detail: "Spotify and Apple Music are now supported."),
         Item(symbol: "car.fill", title: "CarPlay", detail: "Improved Now Playing, with lyrics for whichever music app you use."),
-        Item(symbol: "square.grid.2x2.fill", title: "Widgets", detail: "Add lyrics and playback widgets to your iPhone."),
     ]
 
     var body: some View {

@@ -6,7 +6,7 @@
 import SwiftUI
 
 /// Four short pages explaining how LyricDrive works: connect a music app, press play, CarPlay,
-/// and iPhone widgets. Shown once during onboarding (between Welcome and service selection) and
+/// and a before-you-drive checklist. Shown once during onboarding (between Welcome and service selection) and
 /// any time from Settings → How LyricDrive Works. Purely educational: it reads no playback state
 /// and changes no settings beyond what `onFinish` does.
 struct WalkthroughView: View {
@@ -21,11 +21,10 @@ struct WalkthroughView: View {
     let onFinish: () -> Void
 
     @State private var page = Page.connect
-    @State private var isShowingWidgetGuide = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum Page: Int, CaseIterable, Identifiable {
-        case connect, play, carPlay, widgets
+        case connect, play, carPlay, ready
         var id: Int { rawValue }
     }
 
@@ -47,19 +46,6 @@ struct WalkthroughView: View {
         }
         .background(alignment: .top) { glow }
         .background(LDTheme.night.ignoresSafeArea())
-        .sheet(isPresented: $isShowingWidgetGuide) {
-            NavigationStack {
-                WidgetGuideView()
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Done") { isShowingWidgetGuide = false }
-                                .fontWeight(.semibold)
-                        }
-                    }
-            }
-            .tint(LDTheme.aurora)
-            .preferredColorScheme(.dark)
-        }
     }
 
     // MARK: Chrome
@@ -145,23 +131,13 @@ struct WalkthroughView: View {
                 CarPlayIllustration()
             }
 
-        case .widgets:
+        case .ready:
             WalkthroughPage(
-                eyebrow: "iPhone widgets",
-                title: "Lyrics at a glance.",
-                message: "Add LyricDrive widgets to your iPhone Home Screen or Lock Screen for lyrics, song information and quick controls.",
-                textFirst: true
+                title: "You're ready\nto drive.",
+                message: "Get set up before you head out. Once your music is playing, LyricDrive keeps up on its own.",
+                note: "Always keep your attention on the road."
             ) {
-                VStack(alignment: .leading, spacing: 20) {
-                    Button {
-                        isShowingWidgetGuide = true
-                    } label: {
-                        Label("How to add a widget", systemImage: "plus.square.on.square")
-                    }
-                    .buttonStyle(GlassButtonStyle())
-                    .accessibilityHint("Shows steps for adding a widget to your Home Screen or Lock Screen.")
-                    WidgetLineup()
-                }
+                ReadyChecklist()
             }
         }
     }
@@ -169,32 +145,21 @@ struct WalkthroughView: View {
 
 // MARK: - Page layout
 
-/// Illustration on top, then the headline and one short paragraph (or the reverse, for a page
-/// whose illustration is tall). Scrolls at large text sizes.
+/// Illustration on top, then the headline and one short paragraph. Scrolls at large text sizes.
 private struct WalkthroughPage<Illustration: View>: View {
-    var eyebrow: String?
     let title: String
     let message: String
     var note: String?
-    var textFirst = false
     @ViewBuilder let illustration: () -> Illustration
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                if textFirst {
-                    text
-                        .padding(.top, 12)
-                    illustration()
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 20)
-                } else {
-                    illustration()
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 12)
-                    text
-                        .padding(.top, 32)
-                }
+                illustration()
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 12)
+                text
+                    .padding(.top, 32)
             }
             .padding(.horizontal, LDTheme.screenMargin)
             .padding(.bottom, 24)
@@ -206,9 +171,6 @@ private struct WalkthroughPage<Illustration: View>: View {
 
     private var text: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let eyebrow {
-                EyebrowText(eyebrow)
-            }
             Text(title)
                 .font(.title.weight(.bold))
                 .tracking(-0.4)
@@ -455,35 +417,50 @@ private struct CarPlayIllustration: View {
     }
 }
 
-// MARK: - Page 4: widgets
+// MARK: - Page 4: before you drive
 
-/// The three widgets side by side, each with its name and what it's for.
-private struct WidgetLineup: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            widgetItem(.lyrics) { LyricsWidgetPreview() }
-            HStack(alignment: .top, spacing: 14) {
-                widgetItem(.glance) { LyricGlancePreview() }
-                widgetItem(.nowPlaying) { NowPlayingWidgetPreview() }
-            }
-        }
-        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+/// Three steps to do before setting off, in the same card style as the other illustrations.
+private struct ReadyChecklist: View {
+    private struct Step: Identifiable {
+        let symbol: String
+        let title: String
+        let detail: String
+        var id: String { title }
     }
 
-    private func widgetItem(_ kind: WidgetPreviewKind, @ViewBuilder preview: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            preview()
-            VStack(alignment: .leading, spacing: 2) {
-                Text(kind.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(LDTheme.textPrimary)
-                Text(kind.summary)
-                    .font(.caption)
-                    .foregroundStyle(LDTheme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+    private static let steps = [
+        Step(symbol: "iphone", title: "Open LyricDrive", detail: "Once, before you set off, so it can connect to your music app."),
+        Step(symbol: "play.fill", title: "Press play", detail: "Start a song in Spotify or Apple Music."),
+        Step(symbol: "car.fill", title: "Open it in CarPlay", detail: "Now Playing and Lyrics follow along automatically."),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ForEach(Self.steps) { step in
+                HStack(alignment: .top, spacing: 14) {
+                    Image(systemName: step.symbol)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(LDTheme.aurora)
+                        .frame(width: 36, height: 36)
+                        .background(Circle().fill(.white.opacity(0.08)))
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(step.title)
+                            .font(.headline)
+                            .foregroundStyle(LDTheme.textPrimary)
+                        Text(step.detail)
+                            .font(.footnote)
+                            .foregroundStyle(LDTheme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .accessibilityElement(children: .combine)
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(kind.name) widget. \(kind.summary)")
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(fill: .white.opacity(0.05), stroke: .white.opacity(0.08))
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
     }
 }

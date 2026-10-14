@@ -6,9 +6,6 @@ import WidgetKit
 struct LyricDriveLiveActivityBundle: WidgetBundle {
     var body: some Widget {
         LyricDriveLiveActivity()
-        LyricsWidget()
-        CompactLyricsWidget()
-        PlaybackWidget()
     }
 }
 

@@ -47,7 +47,6 @@ struct SettingsView: View {
                 Section("Help") {
                     // Help only: reopening the walkthrough never resets onboarding progress.
                     NavigationLink("How LyricDrive Works") { HowItWorksView() }
-                    NavigationLink("Widgets") { WidgetGuideView() }
                     NavigationLink("Driving Safely") { DrivingSafelyView() }
                     externalLink("Contact Support", url: Self.supportURL)
                     externalLink("Privacy Policy", url: Self.privacyPolicyURL)
