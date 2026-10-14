@@ -24,6 +24,13 @@ struct LyricWindowSlot: Identifiable {
     let isCurrent: Bool
 }
 
+/// See `LyricsManager.contextWindow(contextLines:)`.
+struct LyricContextWindow: Equatable {
+    let previous: [LyricLine]
+    let current: LyricLine?
+    let next: [LyricLine]
+}
+
 /// Owns synced-lyric state for the currently playing track: fetches lyrics once per track
 /// change (keyed by the normalized track `id`) and derives the active line from
 /// `NowPlayingStore.playbackPositionMs` on every tick, purely locally — no network request
@@ -46,6 +53,30 @@ final class LyricsManager: ObservableObject {
             return LyricWindowSlot(id: -100 + offset, line: nil, isCurrent: false)
         }
     }
+
+    /// The current line with up to `contextLines` lines around it, half before and half after;
+    /// near the start or end of the song the unused side's share goes to the other side, so the
+    /// window stays full. Before the first timed line, `current` is `nil` and every slot is
+    /// upcoming. `nil` without synced lines.
+    func contextWindow(contextLines: Int) -> LyricContextWindow? {
+        guard !lines.isEmpty else { return nil }
+        guard let index = currentLineIndex, lines.indices.contains(index) else {
+            return LyricContextWindow(previous: [], current: nil, next: Array(lines.prefix(contextLines)))
+        }
+        let availableBefore = index
+        let availableAfter = lines.count - 1 - index
+        let after = min(contextLines - min(contextLines / 2, availableBefore), availableAfter)
+        let before = min(contextLines - after, availableBefore)
+        return LyricContextWindow(
+            previous: Array(lines[(index - before)..<index]),
+            current: lines[index],
+            next: Array(lines[(index + 1)..<(index + 1 + after)])
+        )
+    }
+
+    /// The track `lines` and `state` belong to, so consumers can rule out pairing one song's
+    /// lyrics with another song's metadata.
+    var trackID: String? { currentTrackURI }
 
     private let lyricsService: LyricsService
     private var cancellables = Set<AnyCancellable>()

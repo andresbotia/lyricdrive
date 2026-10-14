@@ -34,6 +34,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // Apple Music: resync with the Music app, which may have changed songs while LyricDrive
         // was suspended.
         services.nowPlaying.carPlayDidBecomeActive()
+        // Bring the lyric Live Activity (shown on the CarPlay Dashboard) up to date, or request
+        // it once if an earlier request failed.
+        services.liveActivityManager.carPlayDidConnect()
 
         let presentationController = CarPlayPresentationController(
             spotifyManager: services.spotifyManager,
@@ -65,6 +68,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         case .appleMusic:
             services.nowPlaying.carPlayDidBecomeActive()
         }
+        services.liveActivityManager.carPlayDidBecomeActive()
     }
 
     func templateApplicationScene(

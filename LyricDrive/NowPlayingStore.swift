@@ -94,8 +94,8 @@ final class NowPlayingStore: ObservableObject {
         guard service != activeService else { return }
 
         // Release the previous provider so its state can't leak into the UI, the lyrics
-        // pipeline, CarPlay, or the Live Activity (the latter two are Spotify-only and gated on
-        // Spotify's connection). Switching only disconnects Spotify; its saved session is kept
+        // pipeline, CarPlay, or the Live Activity (which ends on a switch and restarts for the new
+        // service). Switching only disconnects Spotify; its saved session is kept
         // for switching back. Forgetting it is the separate "Disconnect Spotify" action.
         switch activeService {
         case .spotify:

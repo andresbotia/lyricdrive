@@ -43,6 +43,7 @@ struct LyricDriveApp: App {
                     spotifyManager.appDidBecomeActive()
                 }
                 nowPlaying.appDidBecomeActive()
+                AppServices.shared.liveActivityManager.appDidBecomeActive()
             case .inactive, .background:
                 // While CarPlay is connected it still needs App Remote (Spotify) and the playback
                 // clock (Apple Music), so the phone scene leaving the foreground must not stop

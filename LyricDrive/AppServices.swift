@@ -42,6 +42,12 @@ final class AppServices {
         self.nowPlaying = nowPlaying
         let lyricsManager = LyricsManager(nowPlaying: nowPlaying)
         self.lyricsManager = lyricsManager
-        self.liveActivityManager = LiveActivityManager(spotify: spotifyManager, lyrics: lyricsManager, nowPlaying: nowPlaying)
+        self.liveActivityManager = LiveActivityManager(
+            spotify: spotifyManager,
+            appleMusic: appleMusicManager,
+            lyrics: lyricsManager,
+            nowPlaying: nowPlaying,
+            isCarPlayConnected: { AppServices.shared.isCarPlayConnected }
+        )
     }
 }
