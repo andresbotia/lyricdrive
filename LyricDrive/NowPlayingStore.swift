@@ -39,7 +39,7 @@ final class NowPlayingStore: ObservableObject {
     private let appleMusic: AppleMusicManager
     private var bindings = Set<AnyCancellable>()
 
-    private static let activeServiceKey = "musicService.active"
+    nonisolated private static let activeServiceKey = "musicService.active"
 
     /// The persisted active service. Existing installs have no stored value and keep Spotify.
     nonisolated static var storedActiveService: MusicService {

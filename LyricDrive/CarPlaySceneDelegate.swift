@@ -5,6 +5,7 @@
 
 import CarPlay
 import UIKit
+import os
 
 /// Entry point for the CarPlay template scene (declared in Info.plist under
 /// `CPTemplateApplicationSceneSessionRoleApplication`). Owns nothing long-lived: it borrows the
@@ -18,7 +19,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         _ templateApplicationScene: CPTemplateApplicationScene,
         didConnect interfaceController: CPInterfaceController
     ) {
-        print("CarPlay: Interface controller connected")
+        Self.log("Interface controller connected")
         self.interfaceController = interfaceController
 
         let services = AppServices.shared
@@ -49,9 +50,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
         interfaceController.setRootTemplate(presentationController.rootTemplate, animated: false) { success, error in
             if let error {
-                print("CarPlay: Failed to set root template — \(error)")
+                Self.log("Failed to set root template — \(error)")
             } else if !success {
-                print("CarPlay: Root template was not set")
+                Self.log("Root template was not set")
             }
         }
         presentationController.start()
@@ -75,7 +76,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         _ templateApplicationScene: CPTemplateApplicationScene,
         didDisconnectInterfaceController interfaceController: CPInterfaceController
     ) {
-        print("CarPlay: Interface controller disconnected")
+        Self.log("Interface controller disconnected")
         // Only CarPlay-side state is torn down. The shared Spotify/Lyrics managers stay alive and
         // connected for the phone scene; nothing here logs out or disconnects Spotify.
         presentationController?.stop()
@@ -97,5 +98,13 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         UIApplication.shared.connectedScenes.contains { scene in
             scene.session.role == .windowApplication && scene.activationState == .foregroundActive
         }
+    }
+
+    /// DEBUG builds only; nothing is logged in Release.
+    private static func log(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        let text = message()
+        Logger(subsystem: "com.andresbotia.LyricDrive", category: "CarPlay").debug("\(text, privacy: .public)")
+        #endif
     }
 }

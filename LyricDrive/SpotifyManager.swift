@@ -804,7 +804,7 @@ extension SpotifyManager {
     fileprivate func startCarPlayDemo() {
         print("SpotifyManager: --carplay-demo active (DEBUG simulator only)")
         isConnected = true
-        loadDemoTrack(at: 0, playing: true)
+        loadDemoTrack(at: CarPlayDemo.initialTrackIndex, playing: true)
         startPlaybackClock()
 
         // Auto-advance at the end of each track, like a playlist would.

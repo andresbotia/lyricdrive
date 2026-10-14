@@ -110,7 +110,43 @@ enum CarPlayDemo {
             lyrics: nil,
             colors: (UIColor(red: 0.2, green: 0.8, blue: 0.5, alpha: 1), UIColor(red: 0.02, green: 0.12, blue: 0.08, alpha: 1))
         ),
+        // Metadata-length cases for the Now Playing header: short, medium, long.
+        Track(
+            uri: "lyricdrive-demo:track:4",
+            name: "Blinding Lights",
+            artist: "The Weeknd",
+            album: "Simulator Sessions",
+            durationMs: 200_000,
+            lyrics: nil,
+            colors: (UIColor(red: 0.9, green: 0.2, blue: 0.15, alpha: 1), UIColor(red: 0.15, green: 0.02, blue: 0.02, alpha: 1))
+        ),
+        Track(
+            uri: "lyricdrive-demo:track:5",
+            name: "Every Word They Say Sounds Just Like Him",
+            artist: "ROLE MODEL",
+            album: "Simulator Sessions",
+            durationMs: 200_000,
+            lyrics: nil,
+            colors: (UIColor(red: 0.95, green: 0.7, blue: 0.2, alpha: 1), UIColor(red: 0.2, green: 0.1, blue: 0.02, alpha: 1))
+        ),
+        Track(
+            uri: "lyricdrive-demo:track:6",
+            name: "This Is an Extremely Long Song Title That Would Normally Be Truncated on a Small CarPlay Display",
+            artist: "An Artist Name Featuring Another Artist and Several Collaborators",
+            album: "Simulator Sessions",
+            durationMs: 200_000,
+            lyrics: nil,
+            colors: (UIColor(red: 0.5, green: 0.3, blue: 0.95, alpha: 1), UIColor(red: 0.05, green: 0.02, blue: 0.2, alpha: 1))
+        ),
     ]
+
+    /// The first track to play: `--carplay-demo-track <index>`, otherwise the first one.
+    static var initialTrackIndex: Int {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flag = arguments.firstIndex(of: "--carplay-demo-track"), flag + 1 < arguments.count,
+              let index = Int(arguments[flag + 1]), tracks.indices.contains(index) else { return 0 }
+        return index
+    }
 
     /// The demo lyrics for a track, as LRC text run through the real `LRCParser`.
     static func lyricsResult(trackName: String, artistName: String) -> LyricsFetchResult? {

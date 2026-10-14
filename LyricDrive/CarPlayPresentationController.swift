@@ -6,6 +6,7 @@
 import CarPlay
 import Combine
 import UIKit
+import os
 
 /// Translates the active music service's normalized state (`NowPlayingStore`) and
 /// `LyricsManager` into CarPlay templates, for Spotify and Apple Music alike.
@@ -149,6 +150,13 @@ final class CarPlayPresentationController {
             .sink { [weak self] in self?.refresh() }
             .store(in: &cancellables)
 
+        #if DEBUG
+        if #available(iOS 26.4, *) {
+            var limits = "displayScale=\(displayScale) maxButtons=\(CPListTemplateDetailsHeader.maximumActionButtonCount) buttonSize=\(CPListTemplateDetailsHeader.maximumActionButtonSize) artworkSide=\(artworkSide)"
+            if #available(iOS 27.0, *) { limits += " thumbnailMax=\(CPThumbnailImage.maximumImageSize(forAspectRatio: 1))" }
+            Logger(subsystem: "com.andresbotia.LyricDrive", category: "CarPlay").debug("Now Playing header limits: \(limits, privacy: .public)")
+        }
+        #endif
         refresh()
     }
 
@@ -367,22 +375,22 @@ final class CarPlayPresentationController {
         return max(min(maximum.width, maximum.height), 44)
     }
 
-    /// Artwork, title, artist, and the three controls — nothing else (no album, no list rows),
-    /// so the controls are always visible and the text gets the header's whole text column.
-    /// Updates the existing header in place, touching only what changed.
+    /// Artwork, the song's title and artist, and the three controls — nothing else (no album, no
+    /// list rows), so the controls are always visible. Updates the existing header in place,
+    /// touching only what changed.
     ///
-    /// Text is never shortened here. Title and subtitle are single-line fields that CarPlay
-    /// truncates on its own, so when either string is long enough that it likely won't fit, the
-    /// complete text is also offered through `bodyVariants` — the header's only multiline,
-    /// wrapping field — ordered from most to least complete, letting CarPlay pick what fits.
+    /// The header's `title` and `subtitle` are single-line fields whose width CarPlay decides; on
+    /// real head units they've shown only a few characters ("fore…", "ROLE M…"), and no public API
+    /// widens them. So they're left empty and the full title and artist go in `bodyVariants`, the
+    /// header's only wrapping field: one place for the text, never shortened by LyricDrive.
     @available(iOS 26.4, *)
     private func renderDetailsHeader(_ header: HeaderState, previous: HeaderState?) {
         let body = Self.bodyVariants(title: header.title, artist: header.artist)
         guard let details = nowPlayingTemplate.listHeader else {
             let details = CPListTemplateDetailsHeader(
                 thumbnail: CPThumbnailImage(image: currentArtwork),
-                title: header.title,
-                subtitle: header.artist,
+                title: nil,
+                subtitle: nil,
                 bodyVariants: body,
                 actionButtons: makeHeaderButtons(isPaused: header.isPaused)
             )
@@ -393,8 +401,8 @@ final class CarPlayPresentationController {
             return
         }
 
-        if details.title != header.title { details.title = header.title }
-        if details.subtitle != header.artist { details.subtitle = header.artist }
+        if details.title != nil { details.title = nil }
+        if details.subtitle != nil { details.subtitle = nil }
         if details.bodyVariants.map(\.string) != body.map(\.string) { details.bodyVariants = body }
         if previous?.artworkID != header.artworkID || previous?.trackID != header.trackID {
             details.thumbnail = CPThumbnailImage(image: currentArtwork)
@@ -404,24 +412,11 @@ final class CarPlayPresentationController {
         }
     }
 
-    /// Strings longer than these are likely to be cut short in the header's single-line title and
-    /// subtitle on common car displays. Shorter ones fit, so no body text is added for them.
-    private static let comfortableTitleLength = 22
-    private static let comfortableArtistLength = 28
-
-    /// The complete title and/or artist, for the header's wrapping body text — only for the
-    /// strings that are likely truncated above it. Most complete variant first.
+    /// Full title and artist, most preferred first; CarPlay shows the first variant that fits.
+    /// Every variant is complete text: nothing is abbreviated.
     @available(iOS 26.4, *)
     private static func bodyVariants(title: String, artist: String) -> [NSAttributedString] {
-        let longTitle = title.count > comfortableTitleLength
-        let longArtist = artist.count > comfortableArtistLength
-        let variants: [String] = switch (longTitle, longArtist) {
-        case (true, true): ["\(title)\n\(artist)", title]
-        case (true, false): [title]
-        case (false, true): [artist]
-        case (false, false): []
-        }
-        return variants.map { NSAttributedString(string: $0) }
+        ["\(title)\n\(artist)", title, artist].map { NSAttributedString(string: $0) }
     }
 
     private func makeMetadataItem(_ text: String, detailText: String?, image: UIImage? = nil) -> CPListItem {
